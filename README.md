@@ -28,13 +28,13 @@ Copy the zip to the MPC (for example with `scp`), then on the MPC as root:
 
 ```sh
 unzip SurgiQ-0.12.1-mpc-armv7.zip && cd SurgiQ-0.12.1
-sha256sum -c SHA256SUMS              # optional: check the files
-sh install.sh -t /media/SSD/Synths   # or /sdcard/Synths; this restarts MPC (save your project first)
+sha256sum -c SHA256SUMS   # optional: check the files
+sh install.sh             # installs to the internal drive (/sdcard/Synths); restarts MPC, so save your project first
 ```
 
-To remove it: `sh uninstall.sh -t /media/SSD/Synths` from the same folder.
-
-Plugins on an external drive need a drive-exec patch (for example "Auto exec" from the mpc-vst-plugins patches).
+The internal drive is the default and needs no patch. To install on an external drive instead, add
+`-t <its Synths folder>` (for example `-t /media/SSD/Synths`; that needs a drive-exec patch, such as "Auto exec" from the
+mpc-vst-plugins patches). To remove it: `sh uninstall.sh` from the same folder, with the same `-t` if you used one.
 
 ## Build
 
