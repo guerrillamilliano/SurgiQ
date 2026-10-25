@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "id": "surgiq",
+  "name": "SurgiQ",
+  "version": "0.12.1",
+  "kind": "effect",
+  "uid": "4d506571",
+  "manufacturer": "Milliano",
+  "layout": "portable",
+  "so": "peq.so",
+  "skin": "Milliano - VST - SurgiQ",
+  "folder": "portable/Milliano - VST - SurgiQ",
+  "extras": [],
+  "user_data": [],
+  "arch": "armv7",
+  "max_glibc": "2.27",
+  "os_compat": [
+    "3.x"
+  ],
+  "param_compat": 0,
+  "about": "SurgiQ: visual 9-band EQ with live curve, analyser and FX sends (reverb, delay, chorus, shimmer)",
+  "requires": "",
+  "source_repo": null,
+  "license": null,
+  "cpu": null
+}

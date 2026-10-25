@@ -15,13 +15,24 @@ A visual 9-band parametric EQ with effects, made as a native plugin for the **Ak
 
 ## Install
 
-Download `SurgiQ-<version>-mpc-armv7.zip` from [Releases](../../releases) and follow the `INSTALL.md` inside it.
-In short, on the MPC as root:
+Everything needed to install is in [`install/`](install):
+
+- `install/SurgiQ-0.12.1-mpc-armv7.zip`: the installer package (also on the [Releases](../../releases) page)
+- `install/SurgiQ-0.12.1/`: the same package unpacked:
+  - `install.sh` and `uninstall.sh`
+  - `INSTALL.md`
+  - `SHA256SUMS`
+  - `portable/Milliano - VST - SurgiQ/` (the plugin `peq.so` and its skin)
+
+Copy the zip to the MPC (for example with `scp`), then on the MPC as root:
 
 ```sh
 unzip SurgiQ-0.12.1-mpc-armv7.zip && cd SurgiQ-0.12.1
-sh install.sh -t /media/SSD/Synths   # or /sdcard/Synths; this restarts MPC
+sha256sum -c SHA256SUMS              # optional: check the files
+sh install.sh -t /media/SSD/Synths   # or /sdcard/Synths; this restarts MPC (save your project first)
 ```
+
+To remove it: `sh uninstall.sh -t /media/SSD/Synths` from the same folder.
 
 Plugins on an external drive need a drive-exec patch (for example "Auto exec" from the mpc-vst-plugins patches).
 

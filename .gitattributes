@@ -1,0 +1,2 @@
+# keep the installer byte-exact (SHA256SUMS, shell scripts with LF endings)
+install/** -text
