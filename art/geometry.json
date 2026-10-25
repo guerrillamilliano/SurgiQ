@@ -1,0 +1,144 @@
+{
+ "graph": [
+  16,
+  88,
+  1248,
+  324
+ ],
+ "col_w": 26,
+ "drags": [
+  [
+   "shSlider_v_8x324",
+   [
+    16,
+    88,
+    1248,
+    324
+   ]
+  ],
+  [
+   "shSlider_h_1248x8",
+   [
+    16,
+    412,
+    1248,
+    120
+   ]
+  ],
+  [
+   "shSlider_h_240x8",
+   [
+    639,
+    571,
+    240,
+    42
+   ]
+  ],
+  [
+   "shSlider_v_8x42",
+   [
+    639,
+    651,
+    240,
+    42
+   ]
+  ]
+ ],
+ "stems": {
+  "m_sel": "stem_sel.png"
+ },
+ "pills": {
+  "pp_sel": "ring.png"
+ },
+ "cells": {
+  "x": 18,
+  "y": 103,
+  "pitch_x": 52,
+  "pitch_y": 27,
+  "w": 48,
+  "h": 25,
+  "cols": 24
+ },
+ "lanes": {
+  "fxm_rev_lo": {
+   "rect": [
+    16,
+    360,
+    1248,
+    11
+   ],
+   "file": "fxm_rev_lo_%02d.png",
+   "frames": 25
+  },
+  "fxm_rev_hi": {
+   "rect": [
+    16,
+    360,
+    1248,
+    11
+   ],
+   "file": "fxm_rev_hi_%02d.png",
+   "frames": 25
+  },
+  "fxm_dly_lo": {
+   "rect": [
+    16,
+    372,
+    1248,
+    11
+   ],
+   "file": "fxm_dly_lo_%02d.png",
+   "frames": 25
+  },
+  "fxm_dly_hi": {
+   "rect": [
+    16,
+    372,
+    1248,
+    11
+   ],
+   "file": "fxm_dly_hi_%02d.png",
+   "frames": 25
+  },
+  "fxm_cho_lo": {
+   "rect": [
+    16,
+    384,
+    1248,
+    11
+   ],
+   "file": "fxm_cho_lo_%02d.png",
+   "frames": 25
+  },
+  "fxm_cho_hi": {
+   "rect": [
+    16,
+    384,
+    1248,
+    11
+   ],
+   "file": "fxm_cho_hi_%02d.png",
+   "frames": 25
+  },
+  "fxm_shm_lo": {
+   "rect": [
+    16,
+    396,
+    1248,
+    11
+   ],
+   "file": "fxm_shm_lo_%02d.png",
+   "frames": 25
+  },
+  "fxm_shm_hi": {
+   "rect": [
+    16,
+    396,
+    1248,
+    11
+   ],
+   "file": "fxm_shm_hi_%02d.png",
+   "frames": 25
+  }
+ }
+}
