@@ -1,18 +1,18 @@
 /* SurgiQ (tools/html_art/default.css lists every class). WRITTEN BY art/make_art.py. */
 :root { --sheen: 0; --radius: 5px; --shadow: none; --title-size: 14px; --label-size: 13px; --seg-size: 16px;
         --button-size: 15px; }
-.frame-border { fill: #ffffff; stroke: #dcd6ea; stroke-width: 1; }
+.frame-border { fill: #ffffff; stroke: #ecd6da; stroke-width: 1; }
 .frame-rule { stroke: none; }
-.frame-title { font-size: 14px; font-weight: 600; fill: #7b3fe4; letter-spacing: 0.22em; }
-.box-label { font-size: 12px; fill: #545068; letter-spacing: 0.18em; }
-.box { fill: #ffffff; stroke: #dcd6ea; }
-.knob-track { stroke: #e0dbee; }
-.knob-face { fill: #ffffff; stroke: #dcd6ea; stroke-width: 1.5; }
+.frame-title { font-size: 14px; font-weight: 600; fill: #e8173a; letter-spacing: 0.22em; }
+.box-label { font-size: 12px; fill: #5a5052; letter-spacing: 0.18em; }
+.box { fill: #ffffff; stroke: #ecd6da; }
+.knob-track { stroke: #efdcdf; }
+.knob-face { fill: #ffffff; stroke: #ecd6da; stroke-width: 1.5; }
 .knob-arc, .knob-pointer { stroke: var(--accent); }
 .seg-bg { rx: 4px; }
 .seg-tx { font-weight: 600; letter-spacing: 0.06em; }
 .button-bg { rx: 5px; }
 .button-tx { font-weight: 700; letter-spacing: 0.14em; }
-.pill-track { fill: #eeebf6; stroke: #dcd6ea; }
-.pill-thumb { fill: #ffffff; stroke: #545068; stroke-width: 1; }
+.pill-track { fill: #f4eced; stroke: #ecd6da; }
+.pill-thumb { fill: #ffffff; stroke: #5a5052; stroke-width: 1; }
 .on .pill-thumb { fill: var(--accent); stroke: none; }

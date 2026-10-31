@@ -4,8 +4,8 @@
 
 1. The drag areas. MPC's sliders are FilmStrip Knobs, and MPC decodes every filmstrip frame into /var/tmp each time the
    screen opens, so a big slider would cost tens of MB per open. The layout asks for thin sliders instead (cheap to
-   build), grown here to their areas (geometry.json "drags": the analyser and the FREQUENCY box for sel_freq, the GAIN
-   box for sel_gain), pointed at a 2-frame near-invisible strip, without their value text, and their big strips deleted.
+   build), grown here to their areas (geometry.json "drags": the graph for sel_gain, the FREQUENCY box for sel_freq, the GAIN
+   box for g_rel), pointed at a 2-frame near-invisible strip, without their value text, and their big strips deleted.
 2. The band indicators. The builder bakes each when= image opaque (the background redrawn under it), which would blank
    the curve behind a band's stem. Their mode images are replaced by the stem PNGs themselves (transparent around the
    stem and pill; MPC honours PNG alpha), at exactly their column."""
@@ -89,11 +89,12 @@ for c in placed_all:
     c["bounds"]["bounds"] = "%d %d %d %d" % (cells["x"] + (o % cells["cols"]) * cells["pitch_x"],
                                              cells["y"] - 86 + (o // cells["cols"]) * cells["pitch_y"], cells["w"], cells["h"])
     npill += 1
-want_pills = len(pill_of) * cells["cols"] * 11
+want_pills = len(pill_of) * cells["cols"] * 11   # the ring, and since 0.15.1 every band's pill
 if npill != want_pills:
     sys.exit("skin_post: expected %d pill images, found %d" % (want_pills, npill))
 
-# 2c. the effects' range brackets (pictures: an image per frame): each frame's transparent PNG, over exactly its lane
+# 2c. pictures as transparent layers (an image per frame): each frame's own PNG over exactly its rect. The effects' range
+# brackets, and since 0.15.0 the curve's and the spectrum's columns (the curve over the spectrum, both over the grid)
 lanes = {keys.index(k): v for k, v in geo.get("lanes", {}).items()}
 nlane, lane_files = 0, set()
 for c in placed_all:
@@ -110,7 +111,7 @@ for c in placed_all:
     nlane += 1
 want_lanes = sum(v["frames"] for v in lanes.values())
 if nlane != want_lanes:
-    sys.exit("skin_post: expected %d bracket images, found %d" % (want_lanes, nlane))
+    sys.exit("skin_post: expected %d layer images, found %d" % (want_lanes, nlane))
 
 # 3. a tap grid, if the layout has one (0.7.0-0.10.0; geometry.json "pad"): each cell is an option button the builder
 # drew opaque (with its option number on it); it becomes a near-invisible cell, and the selected one the node ring
@@ -136,5 +137,5 @@ for f in removed - keep:
         os.remove(os.path.join(skins, f))
 for f in keep:
     shutil.copy(os.path.join(HERE, "art", f), os.path.join(skins, f))
-print("skin_post: %d drag areas, %d stem images, %d pill images, %d bracket images, %d tap grid cells"
+print("skin_post: %d drag areas, %d stem images, %d pill images, %d layer images, %d tap grid cells"
       % (len(geo["drags"]), n, npill, nlane, ncell))

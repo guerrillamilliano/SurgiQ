@@ -12,7 +12,8 @@
  "presets": "presets.json",
  "defines": {
   "HAS_DISPLAY_REV": 1,
-  "DISPLAY_REV_NO_UPDATE": 1
+  "DISPLAY_REV_NO_UPDATE": 1,
+  "DISPLAY_REV_FRAMES": 1470
  },
  "build": {
   "root": "../..",
@@ -21,7 +22,8 @@
   ],
   "cflags": [],
   "libs": [
-   "-lm"
+   "-lm",
+   "-lpthread"
   ]
  }
 }

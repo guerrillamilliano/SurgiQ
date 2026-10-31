@@ -25,6 +25,18 @@ static void settle(void *e) {
     }
 }
 
+/* A SurgiQ in the layout these tests were written for (0.17.0's defaults): the peaks at 150 Hz, 400 Hz, 1, 2.5, 6, 10
+ * and 14 kHz and the HP, LS, HS and LP on. Since 0.18.0 a fresh one starts with the peaks spread evenly and those four
+ * off (checked by itself in main) */
+static void *create_classic(void) {
+    void *e = api->create(NULL);
+    static const char *const set[] = { "p1_freq", "0.2917", "p2_freq", "0.4337", "p3_freq", "0.5663", "p4_freq", "0.699",
+                                       "p5_freq", "0.8257", "p6_freq", "0.8997", "p7_freq", "0.9484", "on_hp", "1",
+                                       "on_ls", "1", "on_hs", "1", "on_lp", "1", NULL };
+    for (int i = 0; set[i]; i += 2) api->set_param(e, set[i], set[i + 1]);
+    settle(e);
+    return e;
+}
 static const char *get(void *e, const char *k) {
     static char b[4][8192];
     static int n;
@@ -42,18 +54,71 @@ static void expect(const char *what, const char *got, const char *want) {
     printf("%s %-46s %s%s%s\n", ok ? "ok  " : "FAIL", what, got, ok ? "" : "  want ", ok ? "" : want);
 }
 
+/* a curve column's level at its left edge (its option is level * 9 + the tilt's index, src/peq.c TILT) and its tilt */
+static const char *level(void *e, const char *key) {
+    static char b[16];
+    snprintf(b, sizeof b, "%d", atoi(get(e, key)) / 9);
+    return b;
+}
+
+static int tilt(void *e, const char *key) {
+    static const int T[9] = { -8, -4, -2, -1, 0, 1, 2, 4, 8 };
+    return T[atoi(get(e, key)) % 9];
+}
+
+/* the chain never breaks: every column starts where the one before it ended */
+static int chained(void *e) {
+    char k[8], k2[8];
+    for (int i = 0; i + 1 < 48; i++) {
+        snprintf(k, sizeof k, "c%02d", i);
+        int end = atoi(level(e, k)) + tilt(e, k);
+        snprintf(k2, sizeof k2, "c%02d", i + 1);
+        if (atoi(level(e, k2)) != end) return 0;
+    }
+    return 1;
+}
+
 static void curve_row(void *e) {
     char k[8];
     printf("     curve:");
-    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "c%02d", i); printf(" %s", get(e, k)); }
+    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "c%02d", i); printf(" %s%+d", level(e, k), tilt(e, k)); }
     printf("\n");
+}
+
+/* a spectrum column's level at its left edge (its frame is level * 9 + its tilt's index, src/peq.c WTILT) */
+static int wlevel(void *e, const char *key) { return atoi(get(e, key)) / 9; }
+
+static int tilt_w(void *e, const char *key) {
+    static const int T[9] = { 0, -1, 1, -2, 2, -4, 4, -8, 8 };
+    return T[atoi(get(e, key)) % 9];
 }
 
 int main(void) {
     api = mpc_engine();
-    void *e = api->create(NULL);
+    /* a fresh SurgiQ (0.18.0): the HP, LS, HS and LP off, the seven peaks evenly across the graph, flat */
+    void *f = api->create(NULL);
+    settle(f);
+    expect("fresh: HP off", get(f, "on_hp"), "0");
+    expect("  LS off", get(f, "on_ls"), "0");
+    expect("  HS off", get(f, "on_hs"), "0");
+    expect("  LP off", get(f, "on_lp"), "0");
+    expect("  and their pills hidden", get(f, "pp_hp"), "264");
+    static const char *const pk[7] = { "pp_p1", "pp_p2", "pp_p3", "pp_p4", "pp_p5", "pp_p6", "pp_p7" };
+    char want[8], what[64];
+    for (int i = 0; i < 7; i++) {   /* every third pill column on the 0 dB row: 3, 6, .. 21 */
+        snprintf(want, sizeof want, "%d", 5 * 24 + 3 * (i + 1));
+        snprintf(what, sizeof what, "  band %d's pill evenly placed", i + 1);
+        expect(what, get(f, pk[i]), want);
+    }
+    expect("  band 1 at 47 Hz", get(f, "p1_freq_display"), "47 Hz");
+    expect("  band 7 at 8.4 kHz", get(f, "p7_freq_display"), "8.43 kHz");
+    expect("  and the curve flat", get(f, "c24"), "166");
+    api->destroy(f);
+
+    void *e = create_classic();
     expect("default selected band = 3 (index 4)", get(e, "sel_band"), "4");
-    expect("default curve flat (col 24 = 0 dB)", get(e, "c24"), "18");
+    expect("default curve flat (col 24 = 0 dB)", level(e, "c24"), "18");
+    expect("  and level (no tilt)", get(e, "c24"), "166");
     expect("HP and LP markers hidden while off", get(e, "m_hp"), "48");
     expect("  (LP)", get(e, "m_lp"), "48");
     expect("band 3 marker at the 1 kHz column", get(e, "m_p3"), "27");
@@ -64,7 +129,10 @@ int main(void) {
     api->set_param(e, "sel_gain", "12");
     expect("sel_gain writes band 3 gain", get(e, "p3_gain"), "12.00000");
     expect("sel_gain_display", get(e, "sel_gain_display"), "+12.0 dB");
-    expect("curve peaks at the 1 kHz column (+12 = 30)", get(e, "c27"), "30");
+    expect("curve peaks at the 1 kHz column's edge (+12 = 30)", level(e, "c27"), "30");
+    expect("  rising into it", tilt(e, "c26") > 0 ? "yes" : "no", "yes");
+    expect("  and falling after it", tilt(e, "c28") < 0 ? "yes" : "no", "yes");
+    expect("  one unbroken line (each column starts where the last ended)", chained(e) ? "yes" : "no", "yes");
     printf("     display_rev %u -> %s\n", r0, get(e, "display_rev"));
     curve_row(e);
 
@@ -119,7 +187,7 @@ int main(void) {
 
     char st[8192];
     snprintf(st, sizeof st, "%s", get(e, "state"));
-    void *e2 = api->create(NULL);
+    void *e2 = create_classic();
     api->set_param(e2, "state", st);
     expect("state restores the selected band", get(e2, "sel_band"), "5");
     expect("state restores band 3 gain", get(e2, "p3_gain"), "12.00000");
@@ -130,7 +198,7 @@ int main(void) {
     api->destroy(e);
 
     /* the tap grid: option = row * 48 + column, rows every 3 dB from +15 (row 0); row 5 is 0 dB, where the pills sit */
-    e = api->create(NULL);
+    e = create_classic();
     expect("grid reads back band 3 at 1 kHz, 0 dB", get(e, "pad"), "267");   /* row 5 * 48 + column 27 */
     api->set_param(e, "pad", "136");   /* row 2 (+9 dB), column 40 (~6.4 kHz) */
     expect("tap moves band 3's gain to +9 dB", get(e, "p3_gain"), "9.00000");
@@ -155,10 +223,15 @@ int main(void) {
     api->destroy(e);
 
     /* pills at their real height, sliding there */
-    e = api->create(NULL);
+    e = create_classic();
     /* pill cells: row * 24 + column, on every other curve column */
     expect("band 3's pill: 0 dB row, 1 kHz column", get(e, "pp_p3"), "133");
-    expect("HP's pill hidden while it is off", get(e, "pp_hp"), "264");
+    expect("HP fully open: its pill at the graph's left edge (0.15.1)", get(e, "pp_hp"), "120");
+    expect("LP fully open: its pill at the right edge", get(e, "pp_lp"), "143");
+    api->set_param(e, "on_hp", "0");
+    for (int i = 0; i < 20; i++) api->get_param(e, "display_rev", (char[16]){0}, 16);   /* the display catches up */
+    expect("HP switched off: its pill hidden", get(e, "pp_hp"), "264");
+    api->set_param(e, "on_hp", "1");
     api->set_param(e, "p3_gain", "9");
     char midway[16];
     api->get_param(e, "display_rev", midway, sizeof midway);   /* one display poll after the change */
@@ -172,7 +245,7 @@ int main(void) {
     api->destroy(e);
 
     /* the selected band's ring; the old theme switch is inert */
-    e = api->create(NULL);
+    e = create_classic();
     expect("the ring sits on band 3's pill", get(e, "pp_sel"), get(e, "pp_p3"));
     api->set_param(e, "sel_band", "1");
     expect("the ring follows the selection (LS)", get(e, "pp_sel"), get(e, "pp_ls"));
@@ -183,12 +256,60 @@ int main(void) {
     api->set_param(e, "pick_p5", "0");
     expect("  the release changes nothing", get(e, "sel_band"), "6");
     expect("  and the ring moves to it", get(e, "pp_sel"), get(e, "pp_p5"));
+    /* bands 6 and 7 (0.17.0): flat at 10 and 14 kHz, between the high shelf and the low-pass on the 0 dB row */
+    expect("band 6's pill: 0 dB row, 10 kHz column", get(e, "pp_p6"), "141");
+    expect("band 7's pill: 0 dB row, 14 kHz column", get(e, "pp_p7"), "142");
+    api->set_param(e, "pick_p7", "1");
+    expect("a tap on band 7's pill selects it (selector index 8)", get(e, "sel_band"), "8");
+    api->set_param(e, "pick_p7", "0");
+    expect("  shown as band 7's frequency", get(e, "sel_freq_display"), "14.0 kHz");
+    char c45[8];
+    snprintf(c45, sizeof c45, "%s", level(e, "c45"));
+    api->set_param(e, "p6_gain", "9");
+    settle(e);
+    printf("     column 45 (10 kHz): level %s, then %s with band 6 at +9 dB\n", c45, level(e, "c45"));
+    expect("band 6's gain lifts the curve near 10 kHz", atoi(level(e, "c45")) >= atoi(c45) + 4 ? "yes" : "no", "yes");
+    char st6[8192];
+    api->get_param(e, "state", st6, sizeof st6);
+    void *e3 = create_classic();
+    api->set_param(e3, "state", st6);
+    expect("state restores band 6's gain", get(e3, "p6_gain"), "9.00000");
+    api->destroy(e3);
+    /* sharp shapes (0.17.0): the curve stays one line, however steep */
+    void *e4 = create_classic();
+    api->set_param(e4, "p3_gain", "-24");
+    api->set_param(e4, "p3_q", "0.75");   /* Q 4: a narrow, deep cut at 1 kHz */
+    settle(e4);
+    curve_row(e4);
+    expect("a narrow -24 dB cut: still one line", chained(e4) ? "yes" : "no", "yes");
+    int lo = 99;
+    char k4[8];
+    for (int i = 20; i < 34; i++) { snprintf(k4, sizeof k4, "c%02d", i); int l = atoi(level(e4, k4)); if (l < lo) lo = l; }
+    printf("     its dip on the line: level %d (%d dB)\n", lo, lo - 18);
+    expect("  and it dips to within 3 dB of the graph's bottom (-18 dB; steeper than 8 dB a column catches up)", lo <= 3 ? "yes" : "no", "yes");
+    api->set_param(e4, "p3_gain", "0");
+    api->set_param(e4, "hp_freq", "0.4337");   /* a 48 dB/oct high-pass at 400 Hz */
+    api->set_param(e4, "hp_slope", "2");
+    settle(e4);
+    curve_row(e4);
+    expect("a 48 dB/oct high-pass: still one line", chained(e4) ? "yes" : "no", "yes");
+    api->set_param(e4, "hp_freq", "0");
+    api->set_param(e4, "p4_gain", "18");
+    api->set_param(e4, "p4_q", "0.6");   /* a narrow +18 dB boost at 2.5 kHz */
+    settle(e4);
+    curve_row(e4);
+    expect("a narrow +18 dB boost: still one line", chained(e4) ? "yes" : "no", "yes");
+    int hi = -1;
+    for (int i = 26; i < 40; i++) { snprintf(k4, sizeof k4, "c%02d", i); int l = atoi(level(e4, k4)); if (l > hi) hi = l; }
+    printf("     its peak on the line: level %d (+%d dB)\n", hi, hi - 18);
+    expect("  and it climbs to within 3 dB of the boost", hi >= 18 + 15 ? "yes" : "no", "yes");
+    api->destroy(e4);
     api->set_param(e, "theme_apply", "1");
     expect("theme_apply does nothing since 0.12.0", get(e, "theme_apply"), "0");
     api->destroy(e);
 
     /* the FX tab: values, the range brackets on the graph, and the sound */
-    e = api->create(NULL);
+    e = create_classic();
     expect("reverb off: its brackets hidden", get(e, "fxm_rev_lo"), "24");
     expect("mix shown in %", get(e, "fx_rev_mix_display"), "30%");
     expect("delay time in ms (20 * 75^0.5)", get(e, "fx_dly_time_display"), "173 ms");
@@ -202,7 +323,7 @@ int main(void) {
     expect("  the high one at 8 kHz's", get(e, "fxm_rev_hi"), "20");
     expect("the delay's stay hidden", get(e, "fxm_dly_hi"), "24");
     snprintf(st, sizeof st, "%s", get(e, "state"));
-    e2 = api->create(NULL);
+    e2 = create_classic();
     api->set_param(e2, "state", st);
     expect("state restores the reverb on", get(e2, "fx_rev_on"), "1");
     expect("  in BAND", get(e2, "fx_rev_full"), "1");
@@ -212,7 +333,7 @@ int main(void) {
     static const char *const fxs[] = { "", "fx_rev_on", "fx_dly_on", "fx_cho_on", "fx_shm_on" };
     double tail[5];
     for (int f = 0; f < 5; f++) {
-        e = api->create(NULL);
+        e = create_classic();
         if (f) api->set_param(e, fxs[f], "1");
         if (f == 2) api->set_param(e, "fx_dly_time", "0.6");   /* 20 * 75^0.6 = 267 ms: after the 0.25 s mark */
         int16_t ib[256] = { 0 }, ob[256];
@@ -236,7 +357,7 @@ int main(void) {
     expect("chorus adds no long tail", tail[3] < 5 ? "short" : "long", "short");
 
     /* the relative gain control: nudges by the distance moved, then springs back to the middle */
-    e = api->create(NULL);
+    e = create_classic();
     expect("g_rel rests in the middle", get(e, "g_rel"), "0.50000");
     api->set_param(e, "g_rel", "0.5078125");   /* one Q-Link event up (1/128) */
     expect("one Q-Link event: +0.125 dB on band 3", get(e, "p3_gain"), "0.12500");
@@ -257,7 +378,7 @@ int main(void) {
     api->destroy(e);
 
     /* the Q-Link knobs for the short option lists: zones over a continuous knob */
-    e = api->create(NULL);
+    e = create_classic();
     expect("q_view starts in POST's zone", get(e, "q_view_display"), "POST");
     expect("  at its middle", get(e, "q_view"), "0.75000");
     api->set_param(e, "q_view", "0.55");
@@ -269,8 +390,8 @@ int main(void) {
     api->set_param(e, "q_speed", "0.10");
     expect("q_speed's first third is SLOW", get(e, "wave_time"), "0");
     api->set_param(e, "q_rate", "0.95");
-    expect("q_rate's last third is 15/S", get(e, "spec_rate"), "2");
-    expect("  shown as 15/S", get(e, "q_rate_display"), "15/S");
+    expect("q_rate's last third is HIGH", get(e, "spec_rate"), "2");
+    expect("  shown as HIGH", get(e, "q_rate_display"), "HIGH");
     api->set_param(e, "wave_view", "1");   /* a touch on POST: the knob moves into POST's zone */
     expect("a touch moves the knob to the setting's zone", get(e, "q_view"), "0.75000");
     expect("q_slope on a peak band has nothing to show", get(e, "q_slope_display"), "-");
@@ -280,9 +401,9 @@ int main(void) {
     api->destroy(e);
 
     /* the spectrum analyser: a -6 dBFS 1 kHz tone, PRE and POST of a -12 dB cut there, then silence */
-    e = api->create(NULL);
+    e = create_classic();
     expect("analyser on by default", get(e, "spec_on"), "1");
-    expect("no bars before any sound", get(e, "w27"), "0");
+    expect("no spectrum before any sound", get(e, "w27"), "0");
     api->set_param(e, "p3_gain", "-12");   /* band 3 sits on 1 kHz: POST is 12 dB quieter there */
     int16_t in[256], out[256];
     long t = 0;
@@ -292,20 +413,52 @@ int main(void) {
         api->process(e, in, out, 128); }
     api->set_param(e, "wave_view", "0");
     PLAY(1.0, 16384);
-    char row[64] = "", k[8];
-    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[atoi(get(e, k))], 0 }); }
+    char row[128] = "", k[8];
+    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[wlevel(e, k)], 0 }); }
     printf("     PRE : %s\n", row);
-    expect("PRE: the 1 kHz column at -6 dB (+1.8 dB Hann spread: step 23)", get(e, "w27"), "23");
-    expect("PRE: 400 Hz stays dark", get(e, "w20"), "0");
-    expect("PRE: 8 kHz stays dark", get(e, "w42"), "0");
+    char lv[8];   /* the tone: -4.2 dB in its column (-6 dBFS, +1.8 dB Hann spread), -7.2 dB on its edges (half the power) */
+    snprintf(lv, sizeof lv, "%d", wlevel(e, "w27"));
+    printf("     the tone's peak on the line: level %s (true: 22)\n", lv);
+    expect("PRE: the 1 kHz column's line at the tone, within a level (-7.2 dB: level 22)", wlevel(e, "w27") >= 21 ? "yes" : "no", "yes");
+    expect("  the line climbs to it and joins (a chain)", tilt_w(e, "w26") > 0 && wlevel(e, "w26") + tilt_w(e, "w26") == wlevel(e, "w27") ? "yes" : "no", "yes");
+    snprintf(lv, sizeof lv, "%d", wlevel(e, "w20"));
+    expect("PRE: 400 Hz stays dark", lv, "0");
+    snprintf(lv, sizeof lv, "%d", wlevel(e, "w41"));
+    expect("PRE: 8 kHz stays dark", lv, "0");
     api->set_param(e, "wave_view", "1");
     PLAY(1.0, 16384);
     row[0] = 0;
-    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[atoi(get(e, k))], 0 }); }
+    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[wlevel(e, k)], 0 }); }
     printf("     POST: %s\n", row);
-    expect("POST: 12 dB (5 steps) lower after the cut", get(e, "w27"), "18");
+    expect("POST: 12 dB lower after the cut, within a level (-19.2 dB: level 17)", wlevel(e, "w27") >= 16 && wlevel(e, "w27") <= 17 ? "yes" : "no", "yes");
     PLAY(3.5, 0);   /* MED falls 24 dB a second: -4 to -61 dB takes ~2.4 s */
-    expect("silence: the bars fall to nothing", get(e, "w27"), "0");
+    expect("silence: the spectrum falls to nothing", get(e, "w27"), "0");
+    /* timing (0.18.2): a short hit is never missed, and shows soon after it sounds */
+    for (int rate = 0; rate < 3; rate++) {
+        static const char *const RN[3] = { "LOW", "MED", "HIGH" };
+        char rv[4], what[96];
+        snprintf(rv, sizeof rv, "%d", rate);
+        api->set_param(e, "spec_rate", rv);
+        int shown_ms = -1, lat_ms[3] = { 70, 70, 70 };   /* the screen looked at 30 times a second whatever the budget */
+        for (int trial = 0; trial < 5 && shown_ms < 9999; trial++) {   /* hits at different moments of the cycle */
+            PLAY(3.0 + 0.037 * trial, 0);   /* everything back to nothing */
+            int seen = -1;
+            for (int blk = 0; blk < (int)(0.5 * 44100 / 128); blk++) {
+                for (int n = 0; n < 128; n++, t++) {
+                    double amp = blk < 4 ? 16384 : 0;   /* a 12 ms hit of 1 kHz */
+                    in[2 * n] = in[2 * n + 1] = (int16_t)lrint(amp * sin(2 * 3.14159265 * 1000 * t / 44100.0));
+                }
+                api->process(e, in, out, 128);
+                if (seen < 0 && wlevel(e, "w27") > 0) seen = (blk + 1) * 128 * 1000 / 44100;
+            }
+            if (seen < 0) { shown_ms = 99999; break; }   /* missed */
+            if (seen > shown_ms) shown_ms = seen;
+        }
+        printf("     %s: a 12 ms hit shows at worst %d ms after it starts (5 tries)\n", RN[rate], shown_ms);
+        snprintf(what, sizeof what, "%s: a short hit is never missed, and shows within %d ms", RN[rate], lat_ms[rate]);
+        expect(what, shown_ms <= lat_ms[rate] ? "yes" : "no", "yes");
+    }
+    PLAY(3.0, 0);   /* the last hit gone again */
     char rev[32];
     settle(e);   /* the band 3 cut above has slid into place (the wrapper polls display_rev all along) */
     snprintf(rev, sizeof rev, "%s", get(e, "display_rev"));
@@ -313,12 +466,12 @@ int main(void) {
     expect("silence: nothing changes (no redraws)", get(e, "display_rev"), rev);
     PLAY(0.5, 16384);
     api->set_param(e, "spec_on", "0");
-    expect("OFF clears the bars", get(e, "w27"), "0");
+    expect("OFF clears the spectrum", get(e, "w27"), "0");
     PLAY(0.5, 16384);
-    expect("  and they stay clear while off", get(e, "w27"), "0");
+    expect("  and it stays clear while off", get(e, "w27"), "0");
     api->set_param(e, "wave_time", "2");
     snprintf(st, sizeof st, "%s", get(e, "state"));
-    e2 = api->create(NULL);
+    e2 = create_classic();
     api->set_param(e2, "state", st);
     expect("state restores analyser off", get(e2, "spec_on"), "0");
     expect("  POST", get(e2, "wave_view"), "1");

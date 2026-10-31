@@ -1,15 +1,22 @@
 /* Parametric EQ: an MPC OS insert effect on the shared wrapper (wrapper/engine.h, vst.json "effect": true).
- * Nine bands in series: high-pass, low shelf, five peaks, high shelf, low-pass, then an output gain. The filters are
+ * Eleven bands in series: high-pass, low shelf, seven peaks (six and seven since 0.17.0), high shelf, low-pass, then an
+ * output gain. The filters are
  * 12, 24 or 48 dB/oct Butterworth cascades whose last stage takes a resonance; every band can be switched off.
  * Biquads from the RBJ Audio EQ Cookbook, Direct Form II transposed, float internally.
  * Frequency and Q knobs are 0..1 positions mapped on a log scale here; their text comes from "<key>_display".
  * Parameters glide per 128-frame block (about 10 ms) so a Q-Link sweep does not zipper.
  * The screen is FL-style: sel_band picks a band and the sel_* controls edit it (the Q-Links and the graph drag),
- * cNN are read-only curve columns (the response at that column's frequency in 1 dB steps), m_xx are the bands' marker
+ * cNN are read-only curve columns: since 0.16.0 a sloped segment from a level at the column's left edge (1 dB steps), tilted
+ * by one of TILT (frame = level * TILTS + tilt's index). Since 0.17.0 the segments are one chain, each starting where the
+ * one before ended (so the line never breaks), the whole chain fitted to the response at the column edges (chain_fit,
+ * 0.18.0): up to 8 dB a column, so a cut steeper than that starts a column early and still reaches its depth. m_xx are
+ * the bands' marker
  * positions under the graph and m_sel the selected band's. The skin follows them through display_rev (HAS_DISPLAY_REV).
  * wNN is a live spectrum analyser (FL Parametric EQ 2 style) on the curve's 48 frequency columns: a 4096-point FFT of what
- * plays through, spec_rate times a second (4, 8 or 15), each column the energy of its slice of the log axis, in 2.5 dB
- * steps that rise at once and fall at wave_time's speed (12, 24 or 48 dB a second, whatever the rate). wave_view picks PRE (before the EQ) or POST, spec_on switches it off. Every update can move
+ * plays through, every SPEC_HOP frames (the screen told up to 30 times a second, within spec_rate's budget of changes),
+ * each column the energy of its slice of the log axis (a slice
+ * narrower than a bin, below about 70 Hz, reads the spectrum between bins at its centre), shown since 0.18.0 as one
+ * chained line along the column edges (WTILT) in 2.5 dB levels, which rise at once and fall at wave_time's speed (12, 24 or 48 dB a second, whatever the rate). wave_view picks PRE (before the EQ) or POST, spec_on switches it off. Every update can move
  * most columns, which costs MPC's screen thread (docs/NOTES.md "Animation is expensive"), so the rate and the steps are
  * coarse and nothing moves in silence. wave_cap and wave_status are unused since 0.5.0.
  * pad is the tap grid over the graph (one option per cell): a tap moves the selected band to that frequency and gain, or,
@@ -21,16 +28,26 @@
  * the distance moved (GREL_SPAN dB per full travel), like a Q-Link, and it springs back to the middle once left alone
  * for a few display polls, so a drag can always carry on in either direction.
  * pp_sel is the selected band's ring, drawn around its pill. Pills sit on PILL_COLS columns (every other curve column).
- * pick_xx (momentary, 0.12.1): a tap on band xx's pill (the pills are buttons) selects that band.
+ * pick_xx (momentary, 0.12.1): a tap on band xx's pill (the pills are buttons) selects that band. Since 0.14.0 a press
+ * held and dragged moves the band freely, frequency and gain at once (floating bands: see touch_thread).
  * theme_* are unused since 0.12.0 (one skin); they stay so old projects load.
  * The FX tab (fx_<rev|dly|cho|shm>_*): reverb, delay, chorus and shimmer as parallel sends after the EQ, each with ON,
  * MIX, two settings, and a range: FULL (everything) or BAND (only lo..hi, through a 12 dB/oct high-pass and low-pass).
  * fxm_<fx>_lo / _hi place each effect's range brackets on the graph (FXM_COLS columns, FXM_COLS = hidden).
  * Keys, ranges and defaults must agree with gen_params.py. */
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/input.h>
 #include <math.h>
+#include <poll.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <time.h>
+#include <unistd.h>
 #include "engine.h"
 
 #define SR 44100.0f
@@ -41,7 +58,12 @@
 #define GAIN 24.0f        /* band gain range, dB */
 #define GLIDE 0.3f        /* share of the distance to the target covered per block */
 #define NCOL 48           /* curve columns across the graph, on the same log axis as the frequency knobs */
-#define LEVELS 37         /* curve column steps: -18..+18 dB in 1 dB, 18 = 0 dB */
+#define LEVELS 37         /* curve levels: -18..+18 dB in 1 dB, 18 = 0 dB */
+/* a curve segment's tilts, in levels across its column (0.17.0; 0.16.0 had -2..2): each column has LEVELS * TILTS frames
+ * (gen_params.py, art/make_art.py) */
+static const int TILT[] = { -8, -4, -2, -1, 0, 1, 2, 4, 8 };
+#define TILTS 9
+#define TILT_FLAT 4       /* TILT[TILT_FLAT] == 0 */
 #define MARK_OFF NCOL     /* marker option for a band that is off */
 #define MAXST 4           /* biquad stages per band (a 48 dB/oct filter) */
 #define PAD_COLS NCOL     /* the tap grid over the graph ("pad"): the curve's columns ... */
@@ -61,20 +83,33 @@ static const int RV_AP_LEN[RV_APS] = { 556, 441, 341, 225 };
 #define DLY_MAX 66304     /* the delay's line: 1.5 s */
 #define CHO_LEN 2048      /* the chorus's line: 46 ms */
 #define PS_LEN 4096       /* the shimmer's octave-up pitch shifter: two read heads over a 93 ms line */
-#define WCOL NCOL         /* analyser columns: the curve's */
-#define WLEVELS 25        /* analyser steps: 0 = below -60 dB, 1..24 = -60..0 dB (a full-scale sine) in 2.5 dB */
+#define WCOL NCOL         /* analyser columns: the curve's (0.18.0; 96 in 0.13.0-0.17.0, whose w48..w95 stay, unused) */
+#define WLEVELS 25        /* analyser levels: 0 = below -60 dB, 1..24 = -60..0 dB (a full-scale sine) in 2.5 dB */
 #define W_STEP 2.5f
+/* Since 0.18.0 the spectrum's edge is one line, chained like the curve's: wNN's frame = the level at the column's left
+ * edge * WTILTS + the index of its tilt in WTILT (flat first, so frame 0 is "nothing": level 0, flat) */
+static const int WTILT[] = { 0, -1, 1, -2, 2, -4, 4, -8, 8 };
+#define WTILTS 9
 #define FFT_N 4096        /* 10.8 Hz bins */
-static const int SPEC_EVERY[3] = { 11025, 5513, 2940 };   /* spec_rate options: frames between analyses (4, 8, 15 a second) */
-static const float RATE_HZ[3] = { 4.0f, 8.0f, 15.0f };
+/* Since 0.18.2 the analyser analyses every SPEC_HOP frames (~43 a second, so no hit falls between two 93 ms windows and
+ * a hit shows ~23 ms after it sounds) and spec_rate only sets how often the screen is told (publish): 8, 15 or 30 a
+ * second (0.18.1 and before: 4, 8 or 15 analyses a second, each also the screen's update, which missed short hits) */
+#define SPEC_HOP 1024
+#define SPEC_PUB 1470     /* frames between looks at whether to update the screen (30 a second) */
+/* Each changed column is one host automate, and MPC works through them one by one: ~800 a second (30/S on busy music)
+ * queued up and the spectrum fell behind the sound by most of a second (0.18.2). Since 0.18.3 an update goes out at once
+ * when the spectrum rises (a hit), but a falling one waits until something has fallen 2 levels, and all of it keeps to
+ * spec_rate's budget of changes a second on average (a rise may borrow up to a full screen ahead). An update is all or
+ * nothing, so the line never shows half old, half new */
+static const float SPEC_BUDGET[3] = { 120.0f, 200.0f, 320.0f };   /* spec_rate options LOW, MED, HIGH (0.18.3) */
 static const float FALL_DB[3] = { 12.0f, 24.0f, 48.0f };   /* wave_time options: how fast a column falls, dB a second */
 
 /* the real parameters, stored and saved; the sel_*, marker and curve keys are derived from these. The FX send each
  * have the same seven: on, mix (%), two settings (0..1), FULL/BAND, and the band's low and high edges (frequency positions) */
 enum {
     HP_F, LS_F, LS_G, P1_F, P1_G, P1_Q, P2_F, P2_G, P2_Q, P3_F, P3_G, P3_Q, HS_F, HS_G, LP_F, OUT_G,
-    P4_F, P4_G, P4_Q, P5_F, P5_G, P5_Q, HP_Q, LP_Q, HP_SL, LP_SL,
-    ON_HP, ON_LS, ON_P1, ON_P2, ON_P3, ON_P4, ON_P5, ON_HS, ON_LP,
+    P4_F, P4_G, P4_Q, P5_F, P5_G, P5_Q, P6_F, P6_G, P6_Q, P7_F, P7_G, P7_Q, HP_Q, LP_Q, HP_SL, LP_SL,
+    ON_HP, ON_LS, ON_P1, ON_P2, ON_P3, ON_P4, ON_P5, ON_HS, ON_LP, ON_P6, ON_P7,
     FX0, NP = FX0 + 4 * 7
 };
 enum { FX_REV, FX_DLY, FX_CHO, FX_SHM, NFX };
@@ -83,7 +118,9 @@ enum { FO_ON, FO_MIX, FO_P1, FO_P2, FO_FULL, FO_LO, FO_HI };   /* offsets within
 static const char *const KEYS[NP] = {
     "hp_freq", "ls_freq", "ls_gain", "p1_freq", "p1_gain", "p1_q", "p2_freq", "p2_gain", "p2_q", "p3_freq", "p3_gain",
     "p3_q", "hs_freq", "hs_gain", "lp_freq", "out_gain", "p4_freq", "p4_gain", "p4_q", "p5_freq", "p5_gain", "p5_q",
+    "p6_freq", "p6_gain", "p6_q", "p7_freq", "p7_gain", "p7_q",
     "hp_q", "lp_q", "hp_slope", "lp_slope", "on_hp", "on_ls", "on_p1", "on_p2", "on_p3", "on_p4", "on_p5", "on_hs", "on_lp",
+    "on_p6", "on_p7",
     "fx_rev_on", "fx_rev_mix", "fx_rev_size", "fx_rev_damp", "fx_rev_full", "fx_rev_lo", "fx_rev_hi",
     "fx_dly_on", "fx_dly_mix", "fx_dly_time", "fx_dly_fb", "fx_dly_full", "fx_dly_lo", "fx_dly_hi",
     "fx_cho_on", "fx_cho_mix", "fx_cho_rate", "fx_cho_depth", "fx_cho_full", "fx_cho_lo", "fx_cho_hi",
@@ -91,19 +128,23 @@ static const char *const KEYS[NP] = {
 };
 #define G GAIN
 #define FXR 0, 0, 0, 0, 0, 0, 0
-static const float PMIN[NP] = { 0, 0, -G, 0, -G, 0, 0, -G, 0, 0, -G, 0, 0, -G, 0, -24, 0, -G, 0, 0, -G, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0, 0, 0, 0, FXR, FXR, FXR, FXR };
+static const float PMIN[NP] = { 0, 0, -G, 0, -G, 0, 0, -G, 0, 0, -G, 0, 0, -G, 0, -24, 0, -G, 0, 0, -G, 0,
+                                0, -G, 0, 0, -G, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, FXR, FXR, FXR, FXR };
 #undef FXR
 #define FXR 1, 100, 1, 1, 1, 1, 1
-static const float PMAX[NP] = { 1, 1, G, 1, G, 1, 1, G, 1, 1, G, 1, 1, G, 1, 12, 1, G, 1, 1, G, 1, 1, 1, 2, 2,
-                                1, 1, 1, 1, 1, 1, 1, 1, 1, FXR, FXR, FXR, FXR };
+static const float PMAX[NP] = { 1, 1, G, 1, G, 1, 1, G, 1, 1, G, 1, 1, G, 1, 12, 1, G, 1, 1, G, 1,
+                                1, G, 1, 1, G, 1, 1, 1, 2, 2,
+                                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, FXR, FXR, FXR, FXR };
 #undef FXR
 #undef G
-/* positions: 100 Hz 0.233, 150 Hz 0.2917, 400 Hz 0.4337, 1 kHz 0.5663, 2.5 kHz 0.699, 6 kHz 0.8257, 8 kHz 0.8674;
- * Q 1.0 = 0.3264, Q 0.7071 = 0.2324. FX: off, 30% mix, FULL, band 100 Hz..8 kHz */
-static const float PDEF[NP] = { 0.0f, 0.233f, 0, 0.2917f, 0, 0.3264f, 0.4337f, 0, 0.3264f, 0.5663f, 0, 0.3264f,
-                                0.8674f, 0, 1.0f, 0, 0.699f, 0, 0.3264f, 0.8257f, 0, 0.3264f, 0.2324f, 0.2324f, 0, 0,
-                                1, 1, 1, 1, 1, 1, 1, 1, 1,
+/* Since 0.18.0 a fresh SurgiQ starts with the seven peaks evenly spread across the graph (positions 1/8 .. 7/8: 47 Hz,
+ * 112 Hz, 267 Hz, 632 Hz, 1.5 kHz, 3.6 kHz, 8.4 kHz), flat, and the HP, LS, HS and LP off (at 20 Hz, 100 Hz, 8 kHz and
+ * 20 kHz, ready to switch on). Q 1.0 = 0.3264, Q 0.7071 = 0.2324. FX: off, 30% mix, FULL, band 100 Hz..8 kHz */
+static const float PDEF[NP] = { 0.0f, 0.233f, 0, 0.125f, 0, 0.3264f, 0.25f, 0, 0.3264f, 0.375f, 0, 0.3264f,
+                                0.8674f, 0, 1.0f, 0, 0.5f, 0, 0.3264f, 0.625f, 0, 0.3264f,
+                                0.75f, 0, 0.3264f, 0.875f, 0, 0.3264f, 0.2324f, 0.2324f, 0, 0,
+                                0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1,   /* on: HP LS P1..P5 HS LP P6 P7 */
                                 0, 30, 0.6f, 0.4f, 0, 0.233f, 0.8674f,    /* reverb: size, damping */
                                 0, 30, 0.5f, 0.35f, 0, 0.233f, 0.8674f,   /* delay: time (20 ms..1.5 s), feedback */
                                 0, 30, 0.4f, 0.5f, 0, 0.233f, 0.8674f,    /* chorus: rate (0.05..5 Hz), depth */
@@ -117,14 +158,15 @@ static int is_opt(int i) {
 }
 
 /* bands in selector order (gen_params.py BANDS) */
-enum { B_HP, B_LS, B_P1, B_P2, B_P3, B_P4, B_P5, B_HS, B_LP, NB };
+enum { B_HP, B_LS, B_P1, B_P2, B_P3, B_P4, B_P5, B_P6, B_P7, B_HS, B_LP, NB };
 enum { T_HP, T_LS, T_PEAK, T_HS, T_LP };
 typedef struct { int type, freq, gain, q, slope, on; const char *mark; } band_t;
 static const band_t BAND[NB] = {
     { T_HP, HP_F, -1, HP_Q, HP_SL, ON_HP, "m_hp" },   { T_LS, LS_F, LS_G, -1, -1, ON_LS, "m_ls" },
     { T_PEAK, P1_F, P1_G, P1_Q, -1, ON_P1, "m_p1" },  { T_PEAK, P2_F, P2_G, P2_Q, -1, ON_P2, "m_p2" },
     { T_PEAK, P3_F, P3_G, P3_Q, -1, ON_P3, "m_p3" },  { T_PEAK, P4_F, P4_G, P4_Q, -1, ON_P4, "m_p4" },
-    { T_PEAK, P5_F, P5_G, P5_Q, -1, ON_P5, "m_p5" },  { T_HS, HS_F, HS_G, -1, -1, ON_HS, "m_hs" },
+    { T_PEAK, P5_F, P5_G, P5_Q, -1, ON_P5, "m_p5" },  { T_PEAK, P6_F, P6_G, P6_Q, -1, ON_P6, "m_p6" },
+    { T_PEAK, P7_F, P7_G, P7_Q, -1, ON_P7, "m_p7" },  { T_HS, HS_F, HS_G, -1, -1, ON_HS, "m_hs" },
     { T_LP, LP_F, -1, LP_Q, LP_SL, ON_LP, "m_lp" },
 };
 /* Butterworth stage Qs per slope (12/24/48 dB/oct), lowest first; the resonance scales the last stage */
@@ -172,17 +214,27 @@ typedef struct {
     int spec_rate;                 /* spec_rate option */
     float spec_db[WCOL];           /* each column's level, falling smoothly between analyses */
     float ring[2][FFT_N];          /* the latest FFT_N frames, mono, PRE and POST */
-    int rpos, rcount;              /* next write position; frames since the last analysis */
+    int rpos, rcount, pcount;      /* next write position; frames since the last analysis, and since the last publish */
+    float credit;                  /* changes the screen may still take now (SPEC_BUDGET a second, up to a screen's worth) */
     float fre[FFT_N], fim[FFT_N];  /* FFT work space */
-    unsigned char spec[WCOL];      /* shown levels */
+    unsigned char spec[WCOL];      /* shown segments (frames: level * WTILTS + tilt) */
+    /* floating bands: drag a pill to move its band (touch_*, below) */
+    struct touch *tc;              /* the touch reader's thread and the pointer it last saw (NULL: no thread) */
+    int pick_band;                 /* the pill MPC last reported pressed, -1 none ... */
+    long pick_ms;                  /* ... and when */
+    int grab_band;                 /* the band being dragged, -1 none */
+    unsigned grab_seq;             /* the press that drags it */
+    int grab_x, grab_y;            /* where that press went down (screen px) */
+    float grab_f, grab_g;          /* the band's frequency and gain (or resonance) then */
 } peq_t;
 
 /* the FFT's tables, shared by every instance: filled by the first create(), read-only after that */
 static int fft_ready;
 static float hann[FFT_N], tw_re[FFT_N / 2], tw_im[FFT_N / 2];
 static int spec_bin0[WCOL], spec_bin1[WCOL];   /* each column's FFT bins [bin0, bin1) */
+static float spec_mid[WCOL];                   /* a column narrower than a bin: the (fractional) bin at its centre, else -1 */
 
-static float col_cos[NCOL], col_sin[NCOL], col_cos2[NCOL], col_sin2[NCOL];
+static float col_cos[NCOL + 1], col_sin[NCOL + 1], col_cos2[NCOL + 1], col_sin2[NCOL + 1];   /* at the columns' edges */
 
 static float to_hz(float n) { return F_MIN * powf(F_RATIO, n); }
 static float to_q(float n) { return Q_MIN * powf(Q_RATIO, n); }
@@ -300,13 +352,49 @@ static int disp_tick(peq_t *e) {
     return moved;
 }
 
+/* The chain of n segments (n + 1 edges) nearest the wanted levels want[0..n], each segment rising by one of tilt[0..nt)
+ * levels within 0..nlev-1: the least squared distance over all the edges (a Viterbi search, so a peak steeper than the
+ * biggest tilt is climbed a column early and reached, rather than cut short), a tie going to the gentler tilt; falling
+ * short of a level costs `under` times more than overshooting it (the spectrum keeps its peaks that way: an envelope).
+ * Segment k starts at level start[k] and tilts by tilt[ti[k]]. (0.18.0, for the curve and the spectrum) */
+#define CHAIN_MAXN 48
+#define CHAIN_MAXL 37
+static int chain_err(int v, int want, int under) { int d = v - want; return d * d * (d < 0 ? under : 1); }
+
+static void chain_fit(const int *want, int n, int nlev, const int *tilt, int nt, int under, int *start, int *ti) {
+    int cost[CHAIN_MAXN + 1][CHAIN_MAXL];
+    unsigned char from[CHAIN_MAXN + 1][CHAIN_MAXL];
+    for (int v = 0; v < nlev; v++) cost[0][v] = chain_err(v, want[0], under);
+    for (int k = 1; k <= n; k++)
+        for (int v = 0; v < nlev; v++) {
+            int best = -1, bc = 0;
+            for (int i = 0; i < nt; i++) {
+                int u = v - tilt[i];
+                if (u < 0 || u >= nlev) continue;
+                int c = cost[k - 1][u];
+                if (best < 0 || c < bc || (c == bc && abs(tilt[i]) < abs(tilt[best]))) { best = i; bc = c; }
+            }
+            cost[k][v] = bc + chain_err(v, want[k], under);
+            from[k][v] = (unsigned char)best;
+        }
+    int v = 0;
+    for (int u = 1; u < nlev; u++)
+        if (cost[n][u] < cost[n][v] || (cost[n][u] == cost[n][v] && abs(u - want[n]) < abs(v - want[n]))) v = u;
+    for (int k = n; k > 0; k--) {
+        ti[k - 1] = from[k][v];
+        v -= tilt[from[k][v]];
+        start[k - 1] = v;
+    }
+}
+
 /* the screen's curve columns, markers and pills, from the shown values (disp) */
 static void refresh_view(peq_t *e) {
     if (!e->view_dirty) return;
     e->view_dirty = 0;
     chain_t ch[NB];
     for (int b = 0; b < NB; b++) design_band(&ch[b], e->disp, b);
-    for (int k = 0; k < NCOL; k++) {
+    int edge[NCOL + 1];   /* the response at each column edge, in levels */
+    for (int k = 0; k <= NCOL; k++) {
         double db = 0;
         for (int b = 0; b < NB; b++)
             for (int s = 0; s < ch[b].n; s++) {
@@ -316,8 +404,11 @@ static void refresh_view(peq_t *e) {
                 db += 10 * log10((nr * nr + ni * ni) / (dr * dr + di * di) + 1e-30);
             }
         long lv = lround(db) + (LEVELS - 1) / 2;
-        e->curve[k] = lv < 0 ? 0 : lv > LEVELS - 1 ? LEVELS - 1 : (int)lv;
+        edge[k] = lv < 0 ? 0 : lv > LEVELS - 1 ? LEVELS - 1 : (int)lv;
     }
+    int start[NCOL], ti[NCOL];   /* the chain: each column starts where the last one ended */
+    chain_fit(edge, NCOL, LEVELS, TILT, TILTS, 1, start, ti);
+    for (int k = 0; k < NCOL; k++) e->curve[k] = start[k] * TILTS + ti[k];
     for (int b = 0; b < NB; b++) {
         int col = (int)(e->disp[BAND[b].freq] * NCOL);
         col = col < 0 ? 0 : col > NCOL - 1 ? NCOL - 1 : col;
@@ -326,7 +417,9 @@ static void refresh_view(peq_t *e) {
                     !(d->type == T_LP && e->disp[d->freq] >= 0.9995f);
         e->mark[b] = shown ? col : MARK_OFF;
         if (b == e->sel) e->mark_sel = col;   /* the selected band is always pointed at, even when off */
-        /* its pill: the cell at its frequency (PILL_COLS across) and gain (rows every 3 dB; filters ride the 0 dB row) */
+        /* its pill: the cell at its frequency (PILL_COLS across) and gain (rows every 3 dB; filters ride the 0 dB row).
+         * Since 0.15.1 a fully open HP or LP keeps its pill, at the graph's edge, so it can be dragged in */
+        shown = e->disp[d->on] >= 0.5f;
         int row = d->gain >= 0 ? PAD_ZERO - (int)lroundf(e->disp[d->gain] / 3.0f) : PAD_ZERO;
         row = row < 0 ? 0 : row > PAD_ROWS - 1 ? PAD_ROWS - 1 : row;
         int pc = (int)(e->disp[d->freq] * PILL_COLS);
@@ -364,10 +457,14 @@ static void fft_init(void) {
     for (int i = 0; i < FFT_N; i++) hann[i] = 0.5f - 0.5f * cosf(2 * (float)M_PI * i / FFT_N);
     for (int i = 0; i < FFT_N / 2; i++) { tw_re[i] = cosf(2 * (float)M_PI * i / FFT_N); tw_im[i] = -sinf(2 * (float)M_PI * i / FFT_N); }
     for (int k = 0; k < WCOL; k++) {   /* column k is the log-axis slice [k/WCOL, (k+1)/WCOL) */
-        int b0 = (int)lroundf(to_hz((float)k / WCOL) * FFT_N / SR), b1 = (int)lroundf(to_hz((float)(k + 1) / WCOL) * FFT_N / SR);
+        float f0 = to_hz((float)k / WCOL) * FFT_N / SR, f1 = to_hz((float)(k + 1) / WCOL) * FFT_N / SR;
+        int b0 = (int)lroundf(f0), b1 = (int)lroundf(f1);
         if (b0 < 1) b0 = 1;
-        if (b1 <= b0) b1 = b0 + 1;   /* low columns are narrower than a bin: they share the nearest one */
+        if (b1 <= b0) b1 = b0 + 1;
         spec_bin0[k] = b0; spec_bin1[k] = b1;
+        /* low columns are narrower than a bin: they read between the two nearest bins, so neighbours don't all show
+         * the same bin as a flat step */
+        spec_mid[k] = f1 - f0 < 1 ? to_hz((k + 0.5f) / WCOL) * FFT_N / SR : -1;
     }
     fft_ready = 1;
 }
@@ -392,26 +489,63 @@ static void fft(float *re, float *im) {
     }
 }
 
-/* one analysis of the latest FFT_N frames of the chosen side: rise at once, fall at wave_time's speed */
+/* one analysis of the latest FFT_N frames of the chosen side, into spec_db: rise at once, fall at wave_time's speed */
 static void analyse(peq_t *e) {
     const float *r = e->ring[e->wview];
     for (int i = 0; i < FFT_N; i++) { e->fre[i] = r[(e->rpos + i) % FFT_N] * hann[i]; e->fim[i] = 0; }
     fft(e->fre, e->fim);
     const float ref = (FFT_N / 4.0f) * (FFT_N / 4.0f);   /* a full-scale sine's peak bin, Hann window: 0 dB */
-    const float fall = FALL_DB[e->wtime] / RATE_HZ[e->spec_rate];   /* dB a column may fall in one analysis */
-    int changed = 0;
+    const float fall = FALL_DB[e->wtime] * SPEC_HOP / SR;   /* dB a column may fall in one analysis */
     for (int k = 0; k < WCOL; k++) {
         float p = 0;
-        for (int b = spec_bin0[k]; b < spec_bin1[k] && b < FFT_N / 2; b++) p += e->fre[b] * e->fre[b] + e->fim[b] * e->fim[b];
+        if (spec_mid[k] >= 0) {
+            int b = (int)spec_mid[k];
+            float t = spec_mid[k] - b;
+            float p0 = e->fre[b] * e->fre[b] + e->fim[b] * e->fim[b];
+            float p1 = e->fre[b + 1] * e->fre[b + 1] + e->fim[b + 1] * e->fim[b + 1];
+            p = p0 + (p1 - p0) * t;
+        } else
+            for (int b = spec_bin0[k]; b < spec_bin1[k] && b < FFT_N / 2; b++) p += e->fre[b] * e->fre[b] + e->fim[b] * e->fim[b];
         float db = 10 * log10f(p / ref + 1e-12f);
         if (db < -61) db = -61;
         if (db < e->spec_db[k] - fall) db = e->spec_db[k] - fall;   /* rise at once, fall smoothly */
         e->spec_db[k] = db;
-        int lv = db < -60 ? 0 : (int)ceilf((db + 60) / W_STEP);
-        lv = lv > WLEVELS - 1 ? WLEVELS - 1 : lv < 0 ? 0 : lv;
-        if (lv != e->spec[k]) { e->spec[k] = (unsigned char)lv; changed = 1; }
     }
-    if (changed) e->rev++;   /* silence: once everything has fallen to 0, nothing changes and nothing is redrawn */
+}
+
+/* what the screen shows of spec_db (spec_rate times a second) */
+static void publish(peq_t *e) {
+    float pw[WCOL];   /* each column's power (relative to a full-scale sine) */
+    for (int k = 0; k < WCOL; k++) pw[k] = powf(10.0f, e->spec_db[k] / 10);
+    /* shown: one line along the column edges, each edge the mean power of the two columns beside it (so a lone tone
+     * keeps its peak, 3 dB lower, on both edges of its column), chained like the curve: each column starts where the
+     * last ended and tilts as near the next edge as WTILT allows */
+    int edge[WCOL + 1];
+    for (int k = 0; k <= WCOL; k++) {
+        float p = k == 0 ? pw[0] : k == WCOL ? pw[WCOL - 1] : 0.5f * (pw[k - 1] + pw[k]);
+        float db = 10 * log10f(p + 1e-12f);
+        int lv = db < -60 ? 0 : (int)ceilf((db + 60) / W_STEP);
+        edge[k] = lv > WLEVELS - 1 ? WLEVELS - 1 : lv < 0 ? 0 : lv;
+    }
+    int start[WCOL], ti[WCOL];
+    chain_fit(edge, WCOL, WLEVELS, WTILT, WTILTS, 16, start, ti);   /* peaks first */
+    e->credit += SPEC_BUDGET[e->spec_rate] * SPEC_PUB / SR;
+    if (e->credit > WCOL) e->credit = WCOL;
+    int n = 0, rise = 0, fall = 0, quiet = 1, fr[WCOL];
+    for (int k = 0; k < WCOL; k++) {
+        fr[k] = start[k] * WTILTS + ti[k];
+        if (fr[k] == e->spec[k]) continue;
+        n++;
+        int d = start[k] - e->spec[k] / WTILTS;
+        if (d > 1) rise = 1;
+        if (-d > fall) fall = -d;
+        if (fr[k]) quiet = 0;
+    }
+    if (!n) return;   /* silence: once everything has fallen to 0, nothing changes and nothing is redrawn */
+    if (rise ? e->credit <= -WCOL : e->credit < n || (fall < 2 && !quiet)) return;   /* not yet */
+    for (int k = 0; k < WCOL; k++) e->spec[k] = (unsigned char)fr[k];
+    e->credit -= n;
+    e->rev++;
 }
 
 /* one block into the analyser, from the block's input and output (interleaved int16 stereo) */
@@ -421,10 +555,169 @@ static void spec_block(peq_t *e, const int16_t *in, const int16_t *out, int fram
         e->ring[1][e->rpos] = (out[2 * n] + out[2 * n + 1]) * (0.5f / 32768.0f);
         e->rpos = (e->rpos + 1) % FFT_N;
     }
-    if ((e->rcount += frames) >= SPEC_EVERY[e->spec_rate]) {
-        e->rcount = 0;
+    if ((e->rcount += frames) >= SPEC_HOP) {
+        e->rcount -= SPEC_HOP;
         analyse(e);
     }
+    if ((e->pcount += frames) >= SPEC_PUB) {
+        e->pcount = 0;
+        publish(e);
+    }
+}
+
+/* Floating bands (0.14.0). MPC skins have no XY control, so a thread reads the pointer itself: MPC's "Virtual Mouse Touch"
+ * (its own uinput device: a mouse's clicks and drags as touches, in screen pixels) and the touchscreen, both read without
+ * a grab, so MPC still gets every event. Nothing moves on a pointer alone: a drag starts only when MPC also reports a
+ * press on a band's pill (pick_xx) within TOUCH_PAIR_MS of the pointer going down, which can only happen on SurgiQ's own
+ * EQ screen. From then on until the release the band follows the pointer from where it started (relative, so where the
+ * plugin area sits on the screen doesn't matter): across, the frequency (the graph's width spans the whole range); up
+ * and down, the gain (9 px a dB, the graph's scale), or the resonance of the high- and low-pass. The audio thread
+ * applies it each block (touch_apply), under the engine lock like every other change. */
+#define TOUCH_PAIR_MS 400
+#define TOUCH_GRAPH_W 1200.0f      /* art/make_art.py GRAPH_W: px for the whole frequency range (1248 before 0.18.1) */
+#define TOUCH_PX_DB (444.0f / 36)  /* ... GRAPH_H / 36 dB */
+#define TOUCH_PX_Q 444.0f          /* px for the whole resonance range (GRAPH_H) */
+#define TOUCH_NDEV 2
+
+struct touch {
+    pthread_t th;
+    pthread_mutex_t m;
+    volatile int stop;
+    /* the pointer as last seen (under m) */
+    int down, x, y, down_x, down_y;
+    unsigned seq;                  /* +1 on every press */
+    long down_ms;
+};
+
+static long now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000L + t.tv_nsec / 1000000L;
+}
+
+typedef struct { int fd, maxx, maxy, x, y, down; } tdev_t;
+
+/* the pointer devices, found by name (their event numbers can change): MPC's virtual mouse touch and the touchscreen */
+static int touch_open(tdev_t dev[TOUCH_NDEV]) {
+    int n = 0;
+    DIR *d = opendir("/dev/input");
+    if (!d) return 0;
+    struct dirent *de;
+    while ((de = readdir(d)) && n < TOUCH_NDEV) {
+        if (strncmp(de->d_name, "event", 5)) continue;
+        char path[300], name[64] = "";
+        snprintf(path, sizeof path, "/dev/input/%s", de->d_name);
+        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) continue;
+        ioctl(fd, EVIOCGNAME(sizeof name), name);
+        struct input_absinfo ax, ay;
+        if ((strstr(name, "Virtual Mouse Touch") || strstr(name, "Touchscreen")) &&
+            ioctl(fd, EVIOCGABS(ABS_X), &ax) == 0 && ioctl(fd, EVIOCGABS(ABS_Y), &ay) == 0 && ax.maximum > 0 && ay.maximum > 0) {
+            dev[n] = (tdev_t){ fd, ax.maximum, ay.maximum, 0, 0, 0 };
+            n++;
+        } else
+            close(fd);
+    }
+    closedir(d);
+    return n;
+}
+
+/* the panel is mounted rotated: a device's X runs down the 1280 x 800 screen and its Y right to left */
+static void touch_screen(const tdev_t *v, int *sx, int *sy) {
+    *sx = (int)((long)(v->maxy - v->y) * 1280 / (v->maxy + 1));
+    *sy = (int)((long)v->x * 800 / (v->maxx + 1));
+}
+
+static void *touch_thread(void *arg) {
+    struct touch *t = arg;
+    tdev_t dev[TOUCH_NDEV];
+    int n = 0;
+    long rescan = 0;
+    while (!t->stop) {
+        if (n == 0) {   /* nothing to read (yet): look again every few seconds */
+            if (now_ms() >= rescan) { n = touch_open(dev); rescan = now_ms() + 5000; }
+            if (n == 0) { usleep(100000); continue; }
+        }
+        struct pollfd p[TOUCH_NDEV];
+        for (int i = 0; i < n; i++) p[i] = (struct pollfd){ dev[i].fd, POLLIN, 0 };
+        if (poll(p, n, 100) <= 0) continue;
+        for (int i = 0; i < n; i++) {
+            if (!(p[i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
+            struct input_event ev[64];
+            ssize_t r = read(dev[i].fd, ev, sizeof ev);
+            if (r < 0 && errno != EAGAIN) {   /* the device went away: close them all and look again */
+                for (int k = 0; k < n; k++) close(dev[k].fd);
+                n = 0;
+                break;
+            }
+            tdev_t *v = &dev[i];
+            for (int k = 0; k < r / (ssize_t)sizeof ev[0]; k++) {
+                const struct input_event *e = &ev[k];
+                if (e->type == EV_ABS && e->code == ABS_X) v->x = e->value;
+                else if (e->type == EV_ABS && e->code == ABS_Y) v->y = e->value;
+                else if (e->type == EV_KEY && e->code == BTN_TOUCH) v->down = e->value != 0;
+                else if (e->type == EV_SYN && e->code == SYN_REPORT) {
+                    int sx, sy;
+                    touch_screen(v, &sx, &sy);
+                    pthread_mutex_lock(&t->m);
+                    if (v->down && !t->down) { t->seq++; t->down_ms = now_ms(); t->down_x = sx; t->down_y = sy; }
+                    t->down = v->down;
+                    t->x = sx;
+                    t->y = sy;
+                    pthread_mutex_unlock(&t->m);
+                }
+            }
+        }
+    }
+    for (int k = 0; k < n; k++) close(dev[k].fd);
+    return NULL;
+}
+
+static struct touch *touch_start(void) {
+    struct touch *t = calloc(1, sizeof *t);
+    if (!t) return NULL;
+    pthread_mutex_init(&t->m, NULL);
+    if (pthread_create(&t->th, NULL, touch_thread, t)) { pthread_mutex_destroy(&t->m); free(t); return NULL; }
+    return t;
+}
+
+static void touch_stop(struct touch *t) {
+    if (!t) return;
+    t->stop = 1;
+    pthread_join(t->th, NULL);
+    pthread_mutex_destroy(&t->m);
+    free(t);
+}
+
+/* each block: start, follow or end a drag (see above) */
+static void touch_apply(peq_t *e) {
+    if (!e->tc) return;
+    struct touch *t = e->tc;
+    pthread_mutex_lock(&t->m);
+    int down = t->down, x = t->x, y = t->y, dx0 = t->down_x, dy0 = t->down_y;
+    unsigned seq = t->seq;
+    long down_ms = t->down_ms;
+    pthread_mutex_unlock(&t->m);
+    if (e->grab_band >= 0 && (!down || seq != e->grab_seq)) e->grab_band = -1;   /* released */
+    if (e->grab_band < 0 && e->pick_band >= 0 && down) {
+        long dt = e->pick_ms - down_ms;
+        if (dt > -TOUCH_PAIR_MS && dt < TOUCH_PAIR_MS) {   /* this press is on that pill: drag its band */
+            const band_t *d = &BAND[e->pick_band];
+            e->grab_band = e->pick_band;
+            e->grab_seq = seq;
+            e->grab_x = dx0;
+            e->grab_y = dy0;
+            e->grab_f = e->target[d->freq];
+            e->grab_g = d->gain >= 0 ? e->target[d->gain] : d->q >= 0 ? e->target[d->q] : 0;
+        }
+        e->pick_band = -1;
+    }
+    if (e->pick_band >= 0 && now_ms() - e->pick_ms > TOUCH_PAIR_MS) e->pick_band = -1;   /* no press came with it */
+    if (e->grab_band < 0) return;
+    const band_t *d = &BAND[e->grab_band];
+    set_value(e, d->freq, e->grab_f + (x - e->grab_x) / TOUCH_GRAPH_W);
+    if (d->gain >= 0) set_value(e, d->gain, e->grab_g - (y - e->grab_y) / TOUCH_PX_DB);
+    else if (d->q >= 0) set_value(e, d->q, e->grab_g - (y - e->grab_y) / TOUCH_PX_Q);
 }
 
 static void *create(const char *data_dir) {
@@ -437,24 +730,27 @@ static void *create(const char *data_dir) {
     e->wview = 1;
     e->wtime = 1;
     e->spec_on = 1;
-    e->spec_rate = 1;
+    e->spec_rate = 1;   /* MED since 0.18.3 */
+    e->credit = WCOL;
     for (int k = 0; k < WCOL; k++) e->spec_db[k] = -61;
     fft_init();
     e->fresh = 1;
     update(e);
     memcpy(e->disp, e->target, sizeof e->disp);   /* qv starts at 0: q_pos() moves each into its setting's zone */
     e->grel = e->grel_last = 0.5f;
-    for (int k = 0; k < NCOL; k++) {   /* the same values every time, so a second instance rewriting them is harmless */
-        double w = 2 * M_PI * to_hz((k + 0.5f) / NCOL) / SR;
+    for (int k = 0; k <= NCOL; k++) {   /* the same values every time, so a second instance rewriting them is harmless */
+        double w = 2 * M_PI * to_hz((float)k / NCOL) / SR;
         col_cos[k] = (float)cos(w); col_sin[k] = (float)sin(w); col_cos2[k] = (float)cos(2 * w); col_sin2[k] = (float)sin(2 * w);
     }
     e->view_dirty = 1;
+    e->pick_band = e->grab_band = -1;
+    e->tc = touch_start();   /* no thread: the pills still select, nothing floats */
     return e;
 }
 
 static void destroy(void *inst) {
     peq_t *e = inst;
-    if (e) free(e->fx);
+    if (e) { touch_stop(e->tc); free(e->fx); }
     free(e);
 }
 
@@ -471,11 +767,13 @@ static int sel_target(const peq_t *e, const char *key) {
     return -2;
 }
 
-static void reset_band(peq_t *e) {
+static void reset_band(peq_t *e) {   /* the selected band back to its defaults, and on (since 0.18.0 the HP, LS, HS and
+                                      * LP start off, but a RESET on one in use starts it over rather than removing it) */
     const band_t *d = &BAND[e->sel];
-    const int idx[5] = { d->freq, d->gain, d->q, d->slope, d->on };
-    for (int k = 0; k < 5; k++)
+    const int idx[4] = { d->freq, d->gain, d->q, d->slope };
+    for (int k = 0; k < 4; k++)
         if (idx[k] >= 0) set_value(e, idx[k], PDEF[idx[k]]);
+    set_value(e, d->on, 1);
 }
 
 /* The Q-Link versions of the short option lists (q_*): a continuous knob split into equal zones, one per option, so a
@@ -484,7 +782,7 @@ static void reset_band(peq_t *e) {
 enum { QV_VIEW, QV_SPEED, QV_RATE, QV_SPEC, QV_ON, QV_SLOPE, NQ };
 static const char *const QKEYS[NQ] = { "q_view", "q_speed", "q_rate", "q_spec", "q_on", "q_slope" };
 static const int QN[NQ] = { 2, 3, 3, 2, 2, 3 };
-static const char *const QLAB[NQ][3] = { { "PRE", "POST" }, { "SLOW", "MED", "FAST" }, { "4/S", "8/S", "15/S" },
+static const char *const QLAB[NQ][3] = { { "PRE", "POST" }, { "SLOW", "MED", "FAST" }, { "LOW", "MED", "HIGH" },
                                          { "OFF", "ON" }, { "OFF", "ON" }, { "12", "24", "48" } };
 
 static int qkey(const char *key) {
@@ -616,10 +914,14 @@ static void set_param(void *inst, const char *key, const char *val) {
         e->rev++;                 /* the grid reads back where the band really is, even when nothing changed */
         return;
     }
-    if (!strncmp(key, "pick_", 5)) {   /* a tap on a band's pill (momentary): select that band */
+    if (!strncmp(key, "pick_", 5)) {   /* a tap on a band's pill (momentary): select that band, and maybe drag it */
         if (atof(val) < 0.5) return;
         for (int b = 0; b < NB; b++)
-            if (!strcmp(key + 5, BAND[b].mark + 2) && b != e->sel) { e->sel = b; e->rev++; e->view_dirty = 1; }
+            if (!strcmp(key + 5, BAND[b].mark + 2)) {
+                if (b != e->sel) { e->sel = b; e->rev++; e->view_dirty = 1; }
+                e->pick_band = b;   /* touch_apply pairs it with the pointer's press */
+                e->pick_ms = now_ms();
+            }
         return;
     }
     if (!strcmp(key, "band_reset")) {   /* momentary: acts on the press, not on the spring back to 0 */
@@ -655,8 +957,43 @@ static int display(const peq_t *e, int i, char *buf, int len) {
     return 0;
 }
 
+#ifdef PEQ_PROBE
+/* a development probe (vst.json "defines": PEQ_PROBE): which keys are read, how often and from which thread, written
+ * to /tmp/surgiq_probe.log once a second, to find what tells the plugin its screen (and which tab) is showing. Calls
+ * are serialised by the wrapper's engine lock, so the table needs no lock of its own. */
+#include <pthread.h>
+#include <time.h>
+static struct { char key[24]; unsigned long tid; int n; } probe[96];
+static int probe_n;
+static time_t probe_t;
+static void probe_key(const char *key) {
+    unsigned long tid = (unsigned long)pthread_self();
+    char k[24];
+    snprintf(k, sizeof k, "%s", key);
+    if ((k[0] == 'c' || k[0] == 'w') && k[1] >= '0' && k[1] <= '9' && !k[3]) k[1] = '#', k[2] = 0;   /* c##, w## */
+    if (!strncmp(k, "pp_", 3) || !strncmp(k, "m_", 2) || !strncmp(k, "fxm_", 4)) k[3] = 0;
+    int i;
+    for (i = 0; i < probe_n; i++) if (probe[i].tid == tid && !strcmp(probe[i].key, k)) break;
+    if (i == probe_n && probe_n < 96) { snprintf(probe[i].key, sizeof probe[i].key, "%s", k); probe[i].tid = tid; probe[i].n = 0; probe_n++; }
+    if (i < 96) probe[i].n++;
+    time_t now = time(NULL);
+    if (now != probe_t) {
+        FILE *f = fopen("/tmp/surgiq_probe.log", "a");
+        if (f) {
+            for (int j = 0; j < probe_n; j++) fprintf(f, "%ld %lx %s %d\n", (long)now, probe[j].tid, probe[j].key, probe[j].n);
+            fclose(f);
+        }
+        probe_n = 0;
+        probe_t = now;
+    }
+}
+#endif
+
 static int get_param(void *inst, const char *key, char *buf, int len) {
     peq_t *e = inst;
+#ifdef PEQ_PROBE
+    probe_key(key);
+#endif
     if (!strcmp(key, "state")) {
         int n = 0;
         for (int i = 0; i < NP && n < len; i++) n += snprintf(buf + n, len - n, "%s%s=%.5f", i ? ";" : "", KEYS[i], e->target[i]);
@@ -727,8 +1064,8 @@ static int get_param(void *inst, const char *key, char *buf, int len) {
     }
     if (key[0] == 'w' && strlen(key) == 3 && key[1] >= '0' && key[1] <= '9') {
         int k = atoi(key + 1);
-        if (k < 0 || k >= WCOL) return 0;
-        return snprintf(buf, len, "%d", e->spec[k]);
+        if (k < 0 || k >= 96) return 0;
+        return snprintf(buf, len, "%d", k < WCOL ? e->spec[k] : 0);   /* w48..w95: unused since 0.18.0 */
     }
     if (!strcmp(key, "sel_band")) return snprintf(buf, len, "%d", e->sel);
     if (!strcmp(key, "band_reset") || !strcmp(key, "band_prev") || !strcmp(key, "band_next") || !strncmp(key, "pick_", 5))
@@ -875,6 +1212,7 @@ static void fx_tick(peq_t *e, float dl, float dr, float *wl, float *wr) {
 
 static void process(void *inst, const int16_t *in_lr, int16_t *out_lr, int frames) {
     peq_t *e = inst;
+    touch_apply(e);
     update(e);
     float eq[2][128];
     if (frames > 128) frames = 128;   /* the wrapper's DSP block */
