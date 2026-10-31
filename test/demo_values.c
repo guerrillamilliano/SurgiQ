@@ -33,13 +33,13 @@ int main(void) {
     }
     for (int i = 0; i < 40; i++) api->get_param(e, "display_rev", (char[32]){0}, 32);   /* let the pills slide into place */
     static const char *const keys[] = { "m_hp", "m_ls", "m_p1", "m_p2", "m_p3", "m_p4", "m_p5", "m_hs", "m_lp", "m_sel",
-                                        "sel_band", "wave_view", "pad", "pp_hp", "pp_ls", "pp_p1", "pp_p2", "pp_p3", "pp_p4", "pp_p5", "pp_hs", "pp_lp", "pp_sel",
+                                        "sel_band", "wave_view", "pad", "pp_hp", "pp_ls", "pp_p1", "pp_p2", "pp_p3", "pp_p4", "pp_p5", "pp_p6", "pp_p7", "pp_hs", "pp_lp", "pp_sel",
                                         "fxm_rev_lo", "fxm_rev_hi", "fxm_dly_lo", "fxm_dly_hi", "fxm_cho_lo", "fxm_cho_hi",
                                         "fxm_shm_lo", "fxm_shm_hi", NULL };
     char b[64], k[8];
     for (int m = 0; keys[m]; m++) { api->get_param(e, keys[m], b, sizeof b); printf("%s %s\n", keys[m], b); }
     for (int c = 0; c < 48; c++) { snprintf(k, sizeof k, "c%02d", c); api->get_param(e, k, b, sizeof b); printf("%s %s\n", k, b); }
-    for (int c = 0; c < 48; c++) { snprintf(k, sizeof k, "w%02d", c); api->get_param(e, k, b, sizeof b); printf("%s %s\n", k, b); }
+    for (int c = 0; c < 96; c++) { snprintf(k, sizeof k, "w%02d", c); api->get_param(e, k, b, sizeof b); printf("%s %s\n", k, b); }
     api->get_param(e, "sel_freq_display", b, sizeof b); fprintf(stderr, "freq %s\n", b);
     api->get_param(e, "sel_gain_display", b, sizeof b); fprintf(stderr, "gain %s\n", b);
     api->get_param(e, "wave_status", b, sizeof b); fprintf(stderr, "capture %s\n", b);
