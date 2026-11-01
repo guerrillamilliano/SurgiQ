@@ -10,9 +10,10 @@ A visual 11-band parametric EQ with effects, made as a native plugin for the **A
   and evenly spaced, and the high-pass, low shelf, high shelf and low-pass off.
 - **Live EQ curve:** a glowing red line that stays connected through sharp cuts and steep filters.
 - **Filters:** 12, 24 or 48 dB/oct high- and low-pass with resonance. Every band can be switched off.
-- **Live spectrum analyser** behind the curve (PRE or POST), drawn as one connected shape. UPDATE RATE (LOW, MED, HIGH)
-  sets how many changes a second it sends to MPC: MPC falls behind if it gets too many, so pick the highest setting that
-  stays in time with the music. Fast moves show as a line that reaches a peak or dip a column or two early.
+- **Live spectrum analyser** behind the curve (PRE or POST), drawn as one connected line of 16 segments. UPDATE RATE
+  (LOW, MED, HIGH) caps how many changes a second it sends to MPC, because every change costs MPC's screen thread time.
+  It is not true real time: with a busy loop on HIGH the screen redrew about 7 times a second on a Live II, with MPC's
+  main thread near 83%, and it can trail the sound a little. Use MED for more headroom.
 - **FX tab:** reverb, delay, chorus and shimmer as sends after the EQ. Each has ON, MIX and two settings, and runs on
   the whole signal (FULL) or on one frequency band (BAND). Each active effect's range shows as colored brackets on the
   EQ graph.
@@ -26,14 +27,18 @@ A visual 11-band parametric EQ with effects, made as a native plugin for the **A
 - To drag freely, SurgiQ reads pointer positions from `/dev/input` itself, read-only, because MPC skins have no XY
   control. Nothing moves unless MPC also reports a press on one of SurgiQ's pills. Without access to those devices the
   pills still select bands, and the rest of the plugin works normally.
-- The screen is heavy: about 30,000 image layers, though it has run well on one Live II so far.
+- The screen is heavy: about 25,000 image layers, tested on one Live II.
+- CPU: the toolkit's bench rates it WARN on a Live II, with peaks of about 32-33% of an audio block per instance, so plan
+  on one or two instances.
+- During testing of 0.20.0 one Live II froze once (all lights off, touchscreen dead, restart needed). The cause wasn't
+  found and it hasn't happened since. Save your work.
 
 ## Install
 
 Everything needed to install is in [`install/`](install):
 
-- `install/SurgiQ-0.18.3-mpc-armv7.zip`: the installer package (also on the [Releases](../../releases) page)
-- `install/SurgiQ-0.18.3/`: the same package unpacked:
+- `install/SurgiQ-0.20.0-mpc-armv7.zip`: the installer package (also on the [Releases](../../releases) page)
+- `install/SurgiQ-0.20.0/`: the same package unpacked:
   - `install.sh` and `uninstall.sh`
   - `INSTALL.md`
   - `SHA256SUMS`
@@ -42,7 +47,7 @@ Everything needed to install is in [`install/`](install):
 Copy the zip to the MPC (for example with `scp`), then on the MPC as root:
 
 ```sh
-unzip SurgiQ-0.18.3-mpc-armv7.zip && cd SurgiQ-0.18.3
+unzip SurgiQ-0.20.0-mpc-armv7.zip && cd SurgiQ-0.20.0
 sha256sum -c SHA256SUMS   # optional: check the files
 sh install.sh             # installs to the internal drive (/sdcard/Synths); restarts MPC, so save your project first
 ```
@@ -61,7 +66,7 @@ VST2 wrapper, skin builder and toolchain. It is not included here.
    `python3 ports/peq/gen_params.py` and `python3 ports/peq/art/make_art.py` (needs Pillow).
 3. Build: `tools/build_port.sh ports/peq/vst.json`. On Windows with Docker Desktop only, use
    `windows/mpc-build.ps1` (build the helper image first: `docker build -t mpc-builder windows/mpc-builder`).
-   A full build takes about an hour, nearly all of it drawing the skin's layers.
+   A full build can take up to an hour, nearly all of it drawing the skin's layers.
 
 | Path | What |
 |---|---|
@@ -72,3 +77,7 @@ VST2 wrapper, skin builder and toolchain. It is not included here.
 | `test/` | offline checks: `view.c` (screen model and effects), `response.c` (frequency response), `fx_cost.c` (CPU), `preview.sh` (screen preview) |
 
 Engine tests: `gcc -O2 -Wall -Iwrapper ports/peq/test/view.c ports/peq/src/peq.c -lm -lpthread -o /tmp/view && /tmp/view`
+
+## License
+
+[MIT](LICENSE)

@@ -85,12 +85,25 @@ static void curve_row(void *e) {
     printf("\n");
 }
 
-/* a spectrum column's level at its left edge (its frame is level * 9 + its tilt's index, src/peq.c WTILT) */
-static int wlevel(void *e, const char *key) { return atoi(get(e, key)) / 9; }
+/* point v (0..16) of the spectrum's line: segment v's frame is level * 7 + i, its tilt T[i] (src/peq.c WTILT) */
+static int wpoint(void *e, int v) {
+    static const int T[7] = { 0, -1, 1, -3, 3, -8, 8 };
+    char k[8];
+    snprintf(k, sizeof k, "w%02d", v > 15 ? 15 : v);
+    int f = atoi(get(e, k));
+    return f / 7 + (v > 15 ? T[f % 7] : 0);
+}
 
-static int tilt_w(void *e, const char *key) {
-    static const int T[9] = { 0, -1, 1, -2, 2, -4, 4, -8, 8 };
-    return T[atoi(get(e, key)) % 9];
+/* the line never breaks: each segment ends where the next one starts */
+static int wchained(void *e) {
+    static const int T[7] = { 0, -1, 1, -3, 3, -8, 8 };
+    char k[8];
+    for (int v = 0; v < 15; v++) {
+        snprintf(k, sizeof k, "w%02d", v);
+        int f = atoi(get(e, k));
+        if (f / 7 + T[f % 7] != wpoint(e, v + 1)) return 0;
+    }
+    return 1;
 }
 
 int main(void) {
@@ -403,7 +416,7 @@ int main(void) {
     /* the spectrum analyser: a -6 dBFS 1 kHz tone, PRE and POST of a -12 dB cut there, then silence */
     e = create_classic();
     expect("analyser on by default", get(e, "spec_on"), "1");
-    expect("no spectrum before any sound", get(e, "w27"), "0");
+    expect("no spectrum before any sound", get(e, "w08"), "0");
     api->set_param(e, "p3_gain", "-12");   /* band 3 sits on 1 kHz: POST is 12 dB quieter there */
     int16_t in[256], out[256];
     long t = 0;
@@ -414,25 +427,23 @@ int main(void) {
     api->set_param(e, "wave_view", "0");
     PLAY(1.0, 16384);
     char row[128] = "", k[8];
-    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[wlevel(e, k)], 0 }); }
+    for (int i = 0; i <= 16; i++) strcat(row, (char[]){ "0123456789abcdefghijklmno"[wpoint(e, i)], 0 });
     printf("     PRE : %s\n", row);
-    char lv[8];   /* the tone: -4.2 dB in its column (-6 dBFS, +1.8 dB Hann spread), -7.2 dB on its edges (half the power) */
-    snprintf(lv, sizeof lv, "%d", wlevel(e, "w27"));
-    printf("     the tone's peak on the line: level %s (true: 22)\n", lv);
-    expect("PRE: the 1 kHz column's line at the tone, within a level (-7.2 dB: level 22)", wlevel(e, "w27") >= 21 ? "yes" : "no", "yes");
-    expect("  the line climbs to it and joins (a chain)", tilt_w(e, "w26") > 0 && wlevel(e, "w26") + tilt_w(e, "w26") == wlevel(e, "w27") ? "yes" : "no", "yes");
-    snprintf(lv, sizeof lv, "%d", wlevel(e, "w20"));
-    expect("PRE: 400 Hz stays dark", lv, "0");
-    snprintf(lv, sizeof lv, "%d", wlevel(e, "w41"));
-    expect("PRE: 8 kHz stays dark", lv, "0");
+    /* the tone: -4.2 dB in its column (-6 dBFS, +1.8 dB Hann spread), so level 23 at point 9 (column 27, 1 kHz) */
+    (void)k;
+    printf("     the tone's peak on the line: level %d (true: 23)\n", wpoint(e, 9));
+    expect("PRE: the line at the tone, within 2 levels (5 dB: the chain has no +2 tilt, and a lone tone is its worst case)", wpoint(e, 9) >= 21 ? "yes" : "no", "yes");
+    expect("  and one unbroken line", wchained(e) ? "yes" : "no", "yes");
+    expect("PRE: 110 Hz stays dark (the slope up to the tone starts after it)", wpoint(e, 4) == 0 ? "yes" : "no", "yes");
+    expect("PRE: 8 kHz stays dark", wpoint(e, 14) == 0 ? "yes" : "no", "yes");
     api->set_param(e, "wave_view", "1");
     PLAY(1.0, 16384);
     row[0] = 0;
-    for (int i = 0; i < 48; i++) { snprintf(k, sizeof k, "w%02d", i); strcat(row, (char[]){ "0123456789abcdefghijklmno"[wlevel(e, k)], 0 }); }
+    for (int i = 0; i <= 16; i++) strcat(row, (char[]){ "0123456789abcdefghijklmno"[wpoint(e, i)], 0 });
     printf("     POST: %s\n", row);
-    expect("POST: 12 dB lower after the cut, within a level (-19.2 dB: level 17)", wlevel(e, "w27") >= 16 && wlevel(e, "w27") <= 17 ? "yes" : "no", "yes");
+    expect("POST: 12 dB lower after the cut, within a level (-16.2 dB: level 18)", wpoint(e, 9) >= 17 && wpoint(e, 9) <= 18 ? "yes" : "no", "yes");
     PLAY(3.5, 0);   /* MED falls 24 dB a second: -4 to -61 dB takes ~2.4 s */
-    expect("silence: the spectrum falls to nothing", get(e, "w27"), "0");
+    expect("silence: the spectrum falls to nothing", get(e, "w08"), "0");
     /* timing (0.18.2): a short hit is never missed, and shows soon after it sounds */
     for (int rate = 0; rate < 3; rate++) {
         static const char *const RN[3] = { "LOW", "MED", "HIGH" };
@@ -449,7 +460,7 @@ int main(void) {
                     in[2 * n] = in[2 * n + 1] = (int16_t)lrint(amp * sin(2 * 3.14159265 * 1000 * t / 44100.0));
                 }
                 api->process(e, in, out, 128);
-                if (seen < 0 && wlevel(e, "w27") > 0) seen = (blk + 1) * 128 * 1000 / 44100;
+                if (seen < 0 && atoi(get(e, "w08")) > 0) seen = (blk + 1) * 128 * 1000 / 44100;
             }
             if (seen < 0) { shown_ms = 99999; break; }   /* missed */
             if (seen > shown_ms) shown_ms = seen;
@@ -466,9 +477,9 @@ int main(void) {
     expect("silence: nothing changes (no redraws)", get(e, "display_rev"), rev);
     PLAY(0.5, 16384);
     api->set_param(e, "spec_on", "0");
-    expect("OFF clears the spectrum", get(e, "w27"), "0");
+    expect("OFF clears the spectrum", get(e, "w08"), "0");
     PLAY(0.5, 16384);
-    expect("  and it stays clear while off", get(e, "w27"), "0");
+    expect("  and it stays clear while off", get(e, "w08"), "0");
     api->set_param(e, "wave_time", "2");
     snprintf(st, sizeof st, "%s", get(e, "state"));
     e2 = create_classic();

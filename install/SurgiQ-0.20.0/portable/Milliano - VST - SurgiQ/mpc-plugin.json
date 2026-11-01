@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "surgiq",
+  "name": "SurgiQ",
+  "version": "0.20.0",
+  "kind": "effect",
+  "uid": "4d506571",
+  "manufacturer": "Milliano",
+  "layout": "portable",
+  "so": "peq.so",
+  "skin": "Milliano - VST - SurgiQ",
+  "folder": "portable/Milliano - VST - SurgiQ",
+  "extras": [],
+  "user_data": [],
+  "arch": "armv7",
+  "max_glibc": "2.27",
+  "os_compat": [
+    "3.x"
+  ],
+  "param_compat": 0,
+  "about": "9-band parametric visual EQ with floating bands and a live spectrum, plus compressor, reverb, delay, chorus and shimmer.",
+  "requires": "",
+  "source_repo": "guerrillamilliano/SurgiQ",
+  "license": "MIT",
+  "cpu": {
+    "p99_pct": 32.6,
+    "max_pct": 45.7,
+    "verdict": "WARN"
+  }
+}
