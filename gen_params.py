@@ -11,7 +11,7 @@ import os
 NCOL, LEVELS = 48, 37          # curve columns; curve levels (-18..+18 dB in 1 dB, 18 = 0 dB)
 TILTS, TILT_FLAT = 9, 4         # since 0.16.0 a column is a sloped segment: a level and a tilt (src/peq.c TILT; 9 since 0.17.0)
 WCOL, WLEVELS = 96, 49         # 0.15.0-0.17.0's spectrum: columns, steps (since 0.18.0 w48..w95 are unused)
-SCOL, SFRAMES = 48, 25 * 9     # since 0.18.0: the spectrum's columns (the curve's) and frames (25 levels x 9 tilts, src/peq.c WTILT)
+SCOL, SFRAMES = 16, 25 * 7     # since 0.20.0: the spectrum's segments and frames (25 levels x 7 tilts, src/peq.c WTILT)
 GAIN = 24.0                    # band gain range, dB
 BANDS = ["HP", "LS", "1", "2", "3", "4", "5", "6", "7", "HS", "LP"]   # selector order (src/peq.c B_*; 6 and 7 since 0.17.0)
 
@@ -84,13 +84,13 @@ params += [curve(i) for i in range(32, NCOL)]
 params += [{"key": "wave_cap", "name": "Capture", "min": 0.0, "max": 1.0, "default": 0.0, "momentary": True},
            opts("wave_view", "Wave View", ["PRE", "POST"], 1),
            {"key": "wave_status", "name": "Wave Status", "min": 0.0, "max": 1.0, "default": 0.0, "display": "string"}]
-params += [opts("w%02d" % i, "Wave %d" % i, [str(v) for v in range(SFRAMES)], 0) for i in range(SCOL)]
+params += [opts("w%02d" % i, "Wave %d" % i, [str(v) for v in range(SFRAMES if i < SCOL else WLEVELS)], 0) for i in range(48)]
 # 153 on: added in 0.5.0, the live spectrum analyser. wNN are its columns, wave_view its PRE/POST, wave_time its fall-off;
 # wave_cap / wave_status above are unused since then (kept so no index moves)
 params += [opts("wave_time", "Analyser Speed", ["SLOW", "MED", "FAST"], 1),
            opts("spec_on", "Analyser", ["OFF", "ON"], 1)]
 # 155 on: added in 0.6.0
-params += [opts("spec_rate", "Analyser Rate", ["LOW", "MED", "HIGH"], 1)]   # the screen's budget of changes a second (0.18.3; 4/8/15 and 8/15/30 updates a second before)
+params += [opts("spec_rate", "Analyser Rate", ["LOW", "MED", "HIGH"], 2)]   # the screen's budget of changes a second (0.18.3; 4/8/15 and 8/15/30 updates a second before)
 # 156 on: added in 0.7.0, the tap grid over the graph: option = row * PAD_COLS + column; a tap moves the selected band
 # there (rows every 3 dB, +15 at the top, 0 dB in the middle), or on another band's pill (0 dB row) selects that band
 PAD_COLS, PAD_ROWS = NCOL, 11

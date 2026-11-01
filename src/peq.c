@@ -16,7 +16,7 @@
  * plays through, every SPEC_HOP frames (the screen told up to 30 times a second, within spec_rate's budget of changes),
  * each column the energy of its slice of the log axis (a slice
  * narrower than a bin, below about 70 Hz, reads the spectrum between bins at its centre), shown since 0.18.0 as one
- * chained line along the column edges (WTILT) in 2.5 dB levels, which rise at once and fall at wave_time's speed (12, 24 or 48 dB a second, whatever the rate). wave_view picks PRE (before the EQ) or POST, spec_on switches it off. Every update can move
+ * chained line in 8 zones (WTILT, since 0.19.0) in 2.5 dB levels, which rise at once and fall at wave_time's speed (12, 24 or 48 dB a second, whatever the rate). wave_view picks PRE (before the EQ) or POST, spec_on switches it off. Every update can move
  * most columns, which costs MPC's screen thread (docs/NOTES.md "Animation is expensive"), so the rate and the steps are
  * coarse and nothing moves in silence. wave_cap and wave_status are unused since 0.5.0.
  * pad is the tap grid over the graph (one option per cell): a tap moves the selected band to that frequency and gain, or,
@@ -86,10 +86,13 @@ static const int RV_AP_LEN[RV_APS] = { 556, 441, 341, 225 };
 #define WCOL NCOL         /* analyser columns: the curve's (0.18.0; 96 in 0.13.0-0.17.0, whose w48..w95 stay, unused) */
 #define WLEVELS 25        /* analyser levels: 0 = below -60 dB, 1..24 = -60..0 dB (a full-scale sine) in 2.5 dB */
 #define W_STEP 2.5f
-/* Since 0.18.0 the spectrum's edge is one line, chained like the curve's: wNN's frame = the level at the column's left
- * edge * WTILTS + the index of its tilt in WTILT (flat first, so frame 0 is "nothing": level 0, flat) */
-static const int WTILT[] = { 0, -1, 1, -2, 2, -4, 4, -8, 8 };
-#define WTILTS 9
+/* Since 0.20.0 the spectrum is 16 chained segments of one outline, one value each: wNN's frame = the level at its left edge
+ * * WTILTS + its tilt's index (flat first, so frame 0 is "nothing"). w00..w15 are the segments; w16..w95 stay, unused.
+ * MPC's main thread walks every layer bound to a value on each change, about 24 us a layer (measured on a Live II): 0.19.0's
+ * zones of two segments, 1225 layers each, saturated it at 3-4 redraws a second, even with blank pictures. */
+#define WSEGS 16
+static const int WTILT[] = { 0, -1, 1, -3, 3, -8, 8 };
+#define WTILTS 7
 #define FFT_N 4096        /* 10.8 Hz bins */
 /* Since 0.18.2 the analyser analyses every SPEC_HOP frames (~43 a second, so no hit falls between two 93 ms windows and
  * a hit shows ~23 ms after it sounds) and spec_rate only sets how often the screen is told (publish): 8, 15 or 30 a
@@ -98,10 +101,11 @@ static const int WTILT[] = { 0, -1, 1, -2, 2, -4, 4, -8, 8 };
 #define SPEC_PUB 1470     /* frames between looks at whether to update the screen (30 a second) */
 /* Each changed column is one host automate, and MPC works through them one by one: ~800 a second (30/S on busy music)
  * queued up and the spectrum fell behind the sound by most of a second (0.18.2). Since 0.18.3 an update goes out at once
- * when the spectrum rises (a hit), but a falling one waits until something has fallen 2 levels, and all of it keeps to
+ * when the spectrum rises (a hit), and all of it keeps to
  * spec_rate's budget of changes a second on average (a rise may borrow up to a full screen ahead). An update is all or
- * nothing, so the line never shows half old, half new */
-static const float SPEC_BUDGET[3] = { 120.0f, 200.0f, 320.0f };   /* spec_rate options LOW, MED, HIGH (0.18.3) */
+ * nothing, so the line never shows half old, half new. Since 0.20.0 a change costs MPC about 4 ms (175 layers), so HIGH
+ * is about 60% of its main thread; more would saturate it and the screen would fall behind again */
+static const float SPEC_BUDGET[3] = { 60.0f, 100.0f, 140.0f };   /* spec_rate options LOW, MED, HIGH (0.20.0) */
 static const float FALL_DB[3] = { 12.0f, 24.0f, 48.0f };   /* wave_time options: how fast a column falls, dB a second */
 
 /* the real parameters, stored and saved; the sel_*, marker and curve keys are derived from these. The FX send each
@@ -216,8 +220,10 @@ typedef struct {
     float ring[2][FFT_N];          /* the latest FFT_N frames, mono, PRE and POST */
     int rpos, rcount, pcount;      /* next write position; frames since the last analysis, and since the last publish */
     float credit;                  /* changes the screen may still take now (SPEC_BUDGET a second, up to a screen's worth) */
+    int quiet[2];                  /* frames since PRE and POST last made a sound */
     float fre[FFT_N], fim[FFT_N];  /* FFT work space */
-    unsigned char spec[WCOL];      /* shown segments (frames: level * WTILTS + tilt) */
+    unsigned short spec[WSEGS];    /* shown segments (frames, see WTILT) */
+    unsigned char shown[WSEGS + 1];   /* the levels they show at each point of the line */
     /* floating bands: drag a pill to move its band (touch_*, below) */
     struct touch *tc;              /* the touch reader's thread and the pointer it last saw (NULL: no thread) */
     int pick_band;                 /* the pill MPC last reported pressed, -1 none ... */
@@ -395,15 +401,15 @@ static void refresh_view(peq_t *e) {
     for (int b = 0; b < NB; b++) design_band(&ch[b], e->disp, b);
     int edge[NCOL + 1];   /* the response at each column edge, in levels */
     for (int k = 0; k <= NCOL; k++) {
-        double db = 0;
+        double pw = 1;   /* |H(e^jw)|^2 of all the bands, and one log for them all: this runs on the audio thread */
         for (int b = 0; b < NB; b++)
             for (int s = 0; s < ch[b].n; s++) {
-                const coef_t *q = &ch[b].c[s];   /* |H(e^jw)|^2 of one biquad */
+                const coef_t *q = &ch[b].c[s];
                 double nr = q->b0 + q->b1 * col_cos[k] + q->b2 * col_cos2[k], ni = q->b1 * col_sin[k] + q->b2 * col_sin2[k];
                 double dr = 1 + q->a1 * col_cos[k] + q->a2 * col_cos2[k], di = q->a1 * col_sin[k] + q->a2 * col_sin2[k];
-                db += 10 * log10((nr * nr + ni * ni) / (dr * dr + di * di) + 1e-30);
+                pw *= (nr * nr + ni * ni) / (dr * dr + di * di) + 1e-30;
             }
-        long lv = lround(db) + (LEVELS - 1) / 2;
+        long lv = lround(10 * log10(pw > 1e-300 ? pw : 1e-300)) + (LEVELS - 1) / 2;
         edge[k] = lv < 0 ? 0 : lv > LEVELS - 1 ? LEVELS - 1 : (int)lv;
     }
     int start[NCOL], ti[NCOL];   /* the chain: each column starts where the last one ended */
@@ -491,11 +497,18 @@ static void fft(float *re, float *im) {
 
 /* one analysis of the latest FFT_N frames of the chosen side, into spec_db: rise at once, fall at wave_time's speed */
 static void analyse(peq_t *e) {
+    const float fall = FALL_DB[e->wtime] * SPEC_HOP / SR;   /* dB a column may fall in one analysis */
+    if (e->quiet[e->wview] >= FFT_N) {   /* a whole window of silence: no FFT to do, the columns just fall */
+        for (int k = 0; k < WCOL; k++) {
+            float db = e->spec_db[k] - fall;
+            e->spec_db[k] = db < -61 ? -61 : db;
+        }
+        return;
+    }
     const float *r = e->ring[e->wview];
-    for (int i = 0; i < FFT_N; i++) { e->fre[i] = r[(e->rpos + i) % FFT_N] * hann[i]; e->fim[i] = 0; }
+    for (int i = 0; i < FFT_N; i++) { e->fre[i] = r[(e->rpos + i) & (FFT_N - 1)] * hann[i]; e->fim[i] = 0; }
     fft(e->fre, e->fim);
     const float ref = (FFT_N / 4.0f) * (FFT_N / 4.0f);   /* a full-scale sine's peak bin, Hann window: 0 dB */
-    const float fall = FALL_DB[e->wtime] * SPEC_HOP / SR;   /* dB a column may fall in one analysis */
     for (int k = 0; k < WCOL; k++) {
         float p = 0;
         if (spec_mid[k] >= 0) {
@@ -515,51 +528,59 @@ static void analyse(peq_t *e) {
 
 /* what the screen shows of spec_db (spec_rate times a second) */
 static void publish(peq_t *e) {
-    float pw[WCOL];   /* each column's power (relative to a full-scale sine) */
-    for (int k = 0; k < WCOL; k++) pw[k] = powf(10.0f, e->spec_db[k] / 10);
-    /* shown: one line along the column edges, each edge the mean power of the two columns beside it (so a lone tone
-     * keeps its peak, 3 dB lower, on both edges of its column), chained like the curve: each column starts where the
-     * last ended and tilts as near the next edge as WTILT allows */
-    int edge[WCOL + 1];
-    for (int k = 0; k <= WCOL; k++) {
-        float p = k == 0 ? pw[0] : k == WCOL ? pw[WCOL - 1] : 0.5f * (pw[k - 1] + pw[k]);
-        float db = 10 * log10f(p + 1e-12f);
-        int lv = db < -60 ? 0 : (int)ceilf((db + 60) / W_STEP);
-        edge[k] = lv > WLEVELS - 1 ? WLEVELS - 1 : lv < 0 ? 0 : lv;
+    int settled = 1;   /* silence, and the screen already shows it: nothing to fit */
+    for (int k = 0; k < WCOL && settled; k++) settled = e->spec_db[k] <= -61;
+    for (int k = 0; k < WSEGS && settled; k++) settled = !e->spec[k];
+    if (settled) {
+        e->credit = WSEGS;
+        return;
     }
-    int start[WCOL], ti[WCOL];
-    chain_fit(edge, WCOL, WLEVELS, WTILT, WTILTS, 16, start, ti);   /* peaks first */
+    /* the outline's points: one every 3 columns, each the loudest of the 4 columns around it, so a peak between two points
+     * isn't lost; chained like the curve (peaks first) */
+    int edge[WSEGS + 1];
+    for (int v = 0; v <= WSEGS; v++) {
+        int c = v * WCOL / WSEGS, lo = c < 2 ? 0 : c - 2, hi = c + 1 > WCOL - 1 ? WCOL - 1 : c + 1;
+        float db = -120;
+        for (int k = lo; k <= hi; k++) if (e->spec_db[k] > db) db = e->spec_db[k];
+        int lv = db < -60 ? 0 : (int)ceilf((db + 60) / W_STEP);
+        edge[v] = lv > WLEVELS - 1 ? WLEVELS - 1 : lv < 0 ? 0 : lv;
+    }
+    int start[WSEGS], ti[WSEGS];
+    chain_fit(edge, WSEGS, WLEVELS, WTILT, WTILTS, 16, start, ti);
     e->credit += SPEC_BUDGET[e->spec_rate] * SPEC_PUB / SR;
-    if (e->credit > WCOL) e->credit = WCOL;
-    int n = 0, rise = 0, fall = 0, quiet = 1, fr[WCOL];
-    for (int k = 0; k < WCOL; k++) {
-        fr[k] = start[k] * WTILTS + ti[k];
-        if (fr[k] == e->spec[k]) continue;
-        n++;
-        int d = start[k] - e->spec[k] / WTILTS;
-        if (d > 1) rise = 1;
-        if (-d > fall) fall = -d;
-        if (fr[k]) quiet = 0;
+    if (e->credit > WSEGS) e->credit = WSEGS;
+    int n = 0, rise = 0, fr[WSEGS];
+    for (int v = 0; v < WSEGS; v++) {
+        fr[v] = start[v] * WTILTS + ti[v];
+        n += fr[v] != e->spec[v];
+        rise |= start[v] > e->shown[v] + 1;
     }
     if (!n) return;   /* silence: once everything has fallen to 0, nothing changes and nothing is redrawn */
-    if (rise ? e->credit <= -WCOL : e->credit < n || (fall < 2 && !quiet)) return;   /* not yet */
-    for (int k = 0; k < WCOL; k++) e->spec[k] = (unsigned char)fr[k];
+    if (rise ? e->credit <= -WSEGS : e->credit < n) return;   /* not yet */
+    for (int v = 0; v < WSEGS; v++) {
+        e->spec[v] = (unsigned short)fr[v];
+        e->shown[v] = (unsigned char)start[v];
+    }
     e->credit -= n;
     e->rev++;
 }
-
 /* one block into the analyser, from the block's input and output (interleaved int16 stereo) */
 static void spec_block(peq_t *e, const int16_t *in, const int16_t *out, int frames) {
+    int heard[2] = { 0, 0 };
     for (int n = 0; n < frames; n++) {
-        e->ring[0][e->rpos] = (in[2 * n] + in[2 * n + 1]) * (0.5f / 32768.0f);
-        e->ring[1][e->rpos] = (out[2 * n] + out[2 * n + 1]) * (0.5f / 32768.0f);
-        e->rpos = (e->rpos + 1) % FFT_N;
+        int a = in[2 * n] + in[2 * n + 1], b = out[2 * n] + out[2 * n + 1];
+        heard[0] |= a; heard[1] |= b;
+        e->ring[0][e->rpos] = a * (0.5f / 32768.0f);
+        e->ring[1][e->rpos] = b * (0.5f / 32768.0f);
+        e->rpos = (e->rpos + 1) & (FFT_N - 1);
     }
+    for (int s = 0; s < 2; s++) e->quiet[s] = heard[s] ? 0 : e->quiet[s] < FFT_N ? e->quiet[s] + frames : FFT_N;
+    /* never the FFT and the line fit in one block: each alone stays well inside it (the fit waits a block) */
+    e->pcount += frames;
     if ((e->rcount += frames) >= SPEC_HOP) {
         e->rcount -= SPEC_HOP;
         analyse(e);
-    }
-    if ((e->pcount += frames) >= SPEC_PUB) {
+    } else if (e->pcount >= SPEC_PUB) {
         e->pcount = 0;
         publish(e);
     }
@@ -693,7 +714,7 @@ static void touch_stop(struct touch *t) {
 static void touch_apply(peq_t *e) {
     if (!e->tc) return;
     struct touch *t = e->tc;
-    pthread_mutex_lock(&t->m);
+    if (pthread_mutex_trylock(&t->m)) return;   /* the audio thread never waits: the reader has it, try next block */
     int down = t->down, x = t->x, y = t->y, dx0 = t->down_x, dy0 = t->down_y;
     unsigned seq = t->seq;
     long down_ms = t->down_ms;
@@ -730,8 +751,8 @@ static void *create(const char *data_dir) {
     e->wview = 1;
     e->wtime = 1;
     e->spec_on = 1;
-    e->spec_rate = 1;   /* MED since 0.18.3 */
-    e->credit = WCOL;
+    e->spec_rate = 2;   /* HIGH since 0.18.4: it kept up on a Live II with a busy loop */
+    e->credit = WSEGS;
     for (int k = 0; k < WCOL; k++) e->spec_db[k] = -61;
     fft_init();
     e->fresh = 1;
@@ -880,6 +901,7 @@ static void set_param(void *inst, const char *key, const char *val) {
         if (v != e->spec_on) {
             e->spec_on = v;
             memset(e->spec, 0, sizeof e->spec);
+            memset(e->shown, 0, sizeof e->shown);
             for (int k = 0; k < WCOL; k++) e->spec_db[k] = -61;
             e->rev++;
         }
@@ -994,6 +1016,15 @@ static int get_param(void *inst, const char *key, char *buf, int len) {
 #ifdef PEQ_PROBE
     probe_key(key);
 #endif
+    /* the curve's and the spectrum's columns first: 144 of the keys the wrapper reads in one block when display_rev moves,
+     * and everything below is a chain of strcmp */
+    if ((key[0] == 'w' || key[0] == 'c') && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9' && !key[3]) {
+        int k = (key[1] - '0') * 10 + (key[2] - '0');
+        if (key[0] == 'w') return snprintf(buf, len, "%d", k < WSEGS ? e->spec[k] : 0);   /* w16..w95: unused since 0.20.0 */
+        if (k >= NCOL) return 0;
+        refresh_view(e);
+        return snprintf(buf, len, "%d", e->curve[k]);
+    }
     if (!strcmp(key, "state")) {
         int n = 0;
         for (int i = 0; i < NP && n < len; i++) n += snprintf(buf + n, len - n, "%s%s=%.5f", i ? ";" : "", KEYS[i], e->target[i]);
@@ -1062,20 +1093,9 @@ static int get_param(void *inst, const char *key, char *buf, int len) {
         row = row < 0 ? 0 : row > PAD_ROWS - 1 ? PAD_ROWS - 1 : row;
         return snprintf(buf, len, "%d", row * PAD_COLS + col);
     }
-    if (key[0] == 'w' && strlen(key) == 3 && key[1] >= '0' && key[1] <= '9') {
-        int k = atoi(key + 1);
-        if (k < 0 || k >= 96) return 0;
-        return snprintf(buf, len, "%d", k < WCOL ? e->spec[k] : 0);   /* w48..w95: unused since 0.18.0 */
-    }
     if (!strcmp(key, "sel_band")) return snprintf(buf, len, "%d", e->sel);
     if (!strcmp(key, "band_reset") || !strcmp(key, "band_prev") || !strcmp(key, "band_next") || !strncmp(key, "pick_", 5))
         return snprintf(buf, len, "0");
-    if (key[0] == 'c' && strlen(key) == 3 && key[1] >= '0' && key[1] <= '9') {
-        int k = atoi(key + 1);
-        if (k < 0 || k >= NCOL) return 0;
-        refresh_view(e);
-        return snprintf(buf, len, "%d", e->curve[k]);
-    }
     if (!strcmp(key, "m_sel")) { refresh_view(e); return snprintf(buf, len, "%d", e->mark_sel); }
     for (int b = 0; b < NB; b++)
         if (!strcmp(key, BAND[b].mark)) { refresh_view(e); return snprintf(buf, len, "%d", e->mark[b]); }

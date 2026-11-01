@@ -14,8 +14,8 @@ pill_B.png    band B's numbered pill (red), one pill cell, shown at its frequenc
               pill_clear.png, takes the taps and drags)
 ring.png      the selected band's ring, drawn over its pill
 stem_sel.png  the selected band's stem through the graph
-wave_NNN.png  one spectrum column per level and tilt (25 x 9: -60..0 dB in 2.5 dB levels, tilting 0, 1, 2, 4 or 8 levels
-              across it): a segment of the spectrum's outline over a soft fill; chained by the engine into one shape
+wave_NNNN.png one spectrum zone per level and pair of tilts (25 x 7 x 7: -60..0 dB in 2.5 dB levels, two segments tilting
+              0, 1, 3 or 8 levels): a piece of the spectrum's outline over a soft fill; chained by the engine into one shape
 fxm_E_S_NN.png  effect E's range bracket (S = lo / hi) at pill column NN (the last frame: hidden), one lane of the graph
 graph.svg, divider.svg, fx.svg   the grid, labels and name, the panel's red top line, the FX tab's heading
 skin.css      the browser renderer's styling for the controls
@@ -35,10 +35,10 @@ COL_W, GRAPH_H = 25, 444          # 12.33 px per dB (src/peq.c TOUCH_PX_DB); 0.1
 GRAPH_W = NCOL * COL_W            # 1200 (src/peq.c TOUCH_GRAPH_W): since 0.18.1 26 px columns became 25, ...
 GRAPH_X, GRAPH_Y = 56, 88         # ... and the graph moved 40 px in from the left edge, so its low end is easier to reach
                                   # (layout coordinates; the plugin area is y 86..714)
-WCOL, WLEVELS = 48, 25            # the spectrum's columns (the curve's) and levels (src/peq.c, gen_params.py SCOL)
-WTILT = (0, -1, 1, -2, 2, -4, 4, -8, 8)   # its segments' tilts, flat first (src/peq.c WTILT)
-WFRAMES = WLEVELS * len(WTILT)    # a spectrum column's frames: level * len(WTILT) + the tilt's index
-WCOL_W = GRAPH_W // WCOL          # 25 px
+WCOL, WLEVELS = 16, 25            # the spectrum's segments (0.20.0) and levels (src/peq.c WSEGS, gen_params.py SCOL)
+WTILT = (0, -1, 1, -3, 3, -8, 8)  # its segments' tilts, flat first (src/peq.c WTILT)
+WFRAMES = WLEVELS * len(WTILT)    # a segment's frames: level * len(WTILT) + the tilt's index
+WCOL_W = GRAPH_W // WCOL          # 75 px: 3 curve columns
 W_TOP = 0.06                      # the spectrum's 0 dB sits this share of the graph below its top
 W_STEP = 2.5                      # dB a spectrum level (src/peq.c W_STEP)
 DB_RANGE = 18.0
@@ -182,36 +182,37 @@ def wave_top(lv):
 
 
 def wave_columns():
-    """wave_NNN.png, frame = level * len(WTILT) + the tilt's index (src/peq.c): the spectrum behind the curve, a segment
-    of its outline from the level at the column's left edge to WTILT[i] levels higher at its right edge, filled to the
-    bottom. The engine chains the segments, so the outline is one line (0.18.0). Kept quiet (a translucent pink fill, a
-    thin soft edge) so the curve stays the boldest thing on the graph; drawn at SS times the size and scaled down"""
+    """wave_NNNN.png, frame = level * len(WTILT) + i (src/peq.c): a segment of the spectrum behind the curve, its outline
+    from the level at its left edge to WTILT[i] levels higher, filled to the bottom. The engine chains the segments, so the
+    outline is one line. Kept quiet (a translucent pink fill, a thin soft edge) so the curve stays the boldest thing on the
+    graph; drawn at SS times the size and scaled down"""
     SS = 4
     foot = rgb(C["foot"])
-    grad = Image.new("RGBA", (WCOL_W, GRAPH_H))   # the fill: pink at the foot to the accent higher up, more opaque
-    gp = grad.load()
+    grad = Image.new("RGBA", (1, GRAPH_H))   # the fill: pink at the foot to the accent higher up, more opaque
     for y in range(GRAPH_H):
         t = (GRAPH_H - y) / GRAPH_H
         c = tuple(int(foot[i] + (ACCENT[i] - foot[i]) * min(1.0, t * 1.2)) for i in range(3))
-        for x in range(WCOL_W):
-            gp[x, y] = c + (int(45 + 75 * t),)
+        grad.putpixel((0, y), c + (int(45 + 75 * t),))
     grad = grad.resize((WCOL_W * SS, GRAPH_H * SS))
+    clip = lambda v: min(WLEVELS - 1, max(0, v))
     for f in range(WFRAMES):
         lv, i = divmod(f, len(WTILT))
-        to = min(WLEVELS - 1, max(0, lv + WTILT[i]))
-        y0, y1 = wave_top(lv) * SS, wave_top(to) * SS
+        end = clip(lv + WTILT[i])
         big = Image.new("RGBA", (WCOL_W * SS, GRAPH_H * SS), (0, 0, 0, 0))
-        if lv or to:   # level 0 to 0: below -60 dB all along, nothing
+        if lv or end:   # below -60 dB all along: nothing
+            y0, y1 = wave_top(lv) * SS, wave_top(end) * SS
+            ww = WCOL_W * SS
+            pts = [(0, y0), (ww, y1)]
             mask = Image.new("L", big.size, 0)
-            ImageDraw.Draw(mask).polygon([(0, y0), (WCOL_W * SS, y1), (WCOL_W * SS, GRAPH_H * SS), (0, GRAPH_H * SS)], fill=255)
+            ImageDraw.Draw(mask).polygon(pts + [(ww, GRAPH_H * SS), (0, GRAPH_H * SS)], fill=255)
             big.paste(grad, (0, 0), mask)
             d = ImageDraw.Draw(big)
-            seg = [(-SS, y0 - (y1 - y0) / WCOL_W), ((WCOL_W + 1) * SS, y1 + (y1 - y0) / WCOL_W)]
+            over = [(-ww / 8, y0 - (y1 - y0) / 8), (ww + ww / 8, y1 + (y1 - y0) / 8)]   # a little past the edges
             for col, w in ((SHIMMER + (40,), 7 * SS), (SHIMMER + (90,), 4 * SS), (ACCENT + (170,), 2 * SS)):   # the edge
-                d.line(seg, fill=col, width=w)
-                for x, y in ((0, y0), (WCOL_W * SS, y1)):   # round joins, as on the curve
+                d.line(over, fill=col, width=w, joint="curve")
+                for x, y in pts:   # round joins, as on the curve
                     d.ellipse([x - w / 2, y - w / 2, x + w / 2, y + w / 2], fill=col)
-        big.resize((WCOL_W, GRAPH_H), Image.LANCZOS).save(os.path.join(HERE, "wave_%03d.png" % f))
+        big.resize((WCOL_W, GRAPH_H), Image.LANCZOS).save(os.path.join(HERE, "wave_%04d.png" % f))
 
 def fx_marks():
     """fxm_E_lo_NN.png / fxm_E_hi_NN.png: one lane wide, the bracket opening towards the range at pill column NN"""
@@ -365,7 +366,7 @@ def layout():
          'art file="art/divider.svg" x=10 y=%d w=1260 h=3' % (y0 - 4),
          'art file="art/graph.svg" x=%d y=%d w=%d h=%d' % (GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H)]
     # the spectrum, then the curve over it: pictures whose frames skin_post.py turns into transparent layers ("lanes")
-    wfiles = ",".join("art/wave_%03d.png" % v for v in range(WFRAMES))
+    wfiles = ",".join("art/wave_%04d.png" % v for v in range(WFRAMES))
     for i in range(WCOL):
         L.append('picture x=%d y=%d w=%d h=%d key=w%02d files="%s"' % (GRAPH_X + i * WCOL_W, GRAPH_Y, WCOL_W, GRAPH_H, i, wfiles))
     for i in range(NCOL):
@@ -476,7 +477,7 @@ def layout():
                     for e, (k, _, _, _, _) in enumerate(FX) for side in ("lo", "hi")] +
                    [("c%02d" % i, {"rect": [GRAPH_X + i * COL_W, GRAPH_Y, COL_W, GRAPH_H], "file": "col_%03d.png",
                                    "frames": LEVELS * TILTS}) for i in range(NCOL)] +
-                   [("w%02d" % i, {"rect": [GRAPH_X + i * WCOL_W, GRAPH_Y, WCOL_W, GRAPH_H], "file": "wave_%03d.png",
+                   [("w%02d" % i, {"rect": [GRAPH_X + i * WCOL_W, GRAPH_Y, WCOL_W, GRAPH_H], "file": "wave_%04d.png",
                                    "frames": WFRAMES}) for i in range(WCOL)])},
               open(os.path.join(HERE, "geometry.json"), "w"), indent=1)
     return y0, h, gap

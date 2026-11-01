@@ -626,481 +626,161 @@
    "rect": [
     56,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w01": {
    "rect": [
-    81,
+    131,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w02": {
    "rect": [
-    106,
+    206,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w03": {
    "rect": [
-    131,
+    281,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w04": {
    "rect": [
-    156,
+    356,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w05": {
    "rect": [
-    181,
+    431,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w06": {
    "rect": [
-    206,
+    506,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w07": {
    "rect": [
-    231,
+    581,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w08": {
    "rect": [
-    256,
+    656,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w09": {
    "rect": [
-    281,
+    731,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w10": {
    "rect": [
-    306,
+    806,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w11": {
    "rect": [
-    331,
+    881,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w12": {
    "rect": [
-    356,
+    956,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w13": {
    "rect": [
-    381,
+    1031,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w14": {
    "rect": [
-    406,
+    1106,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   },
   "w15": {
    "rect": [
-    431,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w16": {
-   "rect": [
-    456,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w17": {
-   "rect": [
-    481,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w18": {
-   "rect": [
-    506,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w19": {
-   "rect": [
-    531,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w20": {
-   "rect": [
-    556,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w21": {
-   "rect": [
-    581,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w22": {
-   "rect": [
-    606,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w23": {
-   "rect": [
-    631,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w24": {
-   "rect": [
-    656,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w25": {
-   "rect": [
-    681,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w26": {
-   "rect": [
-    706,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w27": {
-   "rect": [
-    731,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w28": {
-   "rect": [
-    756,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w29": {
-   "rect": [
-    781,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w30": {
-   "rect": [
-    806,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w31": {
-   "rect": [
-    831,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w32": {
-   "rect": [
-    856,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w33": {
-   "rect": [
-    881,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w34": {
-   "rect": [
-    906,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w35": {
-   "rect": [
-    931,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w36": {
-   "rect": [
-    956,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w37": {
-   "rect": [
-    981,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w38": {
-   "rect": [
-    1006,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w39": {
-   "rect": [
-    1031,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w40": {
-   "rect": [
-    1056,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w41": {
-   "rect": [
-    1081,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w42": {
-   "rect": [
-    1106,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w43": {
-   "rect": [
-    1131,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w44": {
-   "rect": [
-    1156,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w45": {
-   "rect": [
     1181,
     88,
-    25,
+    75,
     444
    ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w46": {
-   "rect": [
-    1206,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
-  },
-  "w47": {
-   "rect": [
-    1231,
-    88,
-    25,
-    444
-   ],
-   "file": "wave_%03d.png",
-   "frames": 225
+   "file": "wave_%04d.png",
+   "frames": 175
   }
  }
 }
