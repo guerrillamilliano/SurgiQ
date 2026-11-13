@@ -6,18 +6,31 @@
 set -e
 cd "$(dirname "$0")"
 NAME='SurgiQ'; SO='peq.so'; SKIN='Milliano - VST - SurgiQ'; UID_HEX='4d506571'; LEGACY_SO='/sdcard/vst/peq.so'; USER_DATA=''
-SYNTHS=/sdcard/Synths; YES=0; DEFER=0
+SYNTHS=/sdcard/Synths; YES=0; DEFER=0; TARGET_SET=0
 die() { echo "error: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
     case "$1" in
         -y) YES=1; shift ;;
         -n) DEFER=1; shift ;;   # a batch caller has stopped MPC and starts it again after the last plugin
-        -t) [ -n "$2" ] || die "-t needs a folder"; SYNTHS="$2"; shift 2 ;;
-        *) die "usage: sh uninstall.sh [-y] [-n] [-t <synths-dir>]" ;;
+        -t) [ -n "$2" ] || die "-t needs a folder"; SYNTHS="$2"; TARGET_SET=1; shift 2 ;;
+        *) die "usage: sh uninstall.sh [-y] [-n] [-t <plugins-dir>]" ;;
     esac
 done
+# MPC 3.10.1+ (see install.sh): the plugin is "<manufacturer> - <name>" in a "VST2 Plugins" folder, with no plugin-list entry
+VST2=0
+if [ -n "$MPC_VST2" ]; then VST2=$MPC_VST2
+elif [ -z "$MPC_INSTALL_TEST" ] && [ -f /usr/bin/MPC ] && grep -aq 'VST2 plugin folder' /usr/bin/MPC; then VST2=1; fi
+DIRNAME="$SKIN"
+if [ "$VST2" = 1 ]; then
+    DIRNAME=$(printf '%s' "$SKIN" | sed 's/ - VST - / - /')
+    if [ $TARGET_SET = 0 ]; then   # whichever "VST2 Plugins" folder holds it
+        SYNTHS=""
+        for v in /media/*/"VST2 Plugins"; do [ -d "$v/$DIRNAME" ] && { SYNTHS="$v"; break; }; done
+        [ -n "$SYNTHS" ] || die "$NAME isn't in any VST2 Plugins folder (give the folder with -t)"
+    fi
+fi
 case "$SYNTHS" in /*) ;; *) die "-t must be an absolute path" ;; esac
-FILE="$SYNTHS/$SKIN/$SO"
+FILE="$SYNTHS/$DIRNAME/$SO"
 OLDFILE="$MPC_LEGACY_ROOT$LEGACY_SO"   # MPC_LEGACY_ROOT is empty on a device; tests point it at a scratch folder
 
 if [ -z "$MPC_INSTALL_TEST" ]; then
@@ -53,6 +66,8 @@ else
     fi
 fi
 
+BAK="(MPC.settings untouched)"
+if [ "$VST2" != 1 ]; then
 BAK="$SETTINGS.bak-$(echo "$SO" | sed 's/\.so$//')-$(date +%Y%m%d-%H%M%S)"
 cp "$SETTINGS" "$BAK"
 awk -v mode=remove -v file="$FILE" -v alt="$LEGACY_SO" -v uid="$UID_HEX" -f plugin_list.awk "$SETTINGS" > "$SETTINGS.new"
@@ -66,9 +81,10 @@ if command -v python3 >/dev/null; then
         { rm -f "$SETTINGS.new"; die "edited settings aren't valid XML; MPC.settings unchanged"; }
 fi
 mv "$SETTINGS.new" "$SETTINGS"
+fi
 
 # the folder goes, except files the user added
-DIR="$SYNTHS/$SKIN"; KEEP="$SYNTHS/.$SKIN.keep"
+DIR="$SYNTHS/$DIRNAME"; KEEP="$SYNTHS/.$DIRNAME.keep"
 if [ -d "$DIR" ]; then
     rm -rf "$KEEP"
     for d in $USER_DATA; do

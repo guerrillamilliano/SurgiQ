@@ -25,6 +25,15 @@ An older install of this plugin (the previous layout, with the `.so` in `/sdcard
 Then add **SurgiQ** to a track from the plugin browser (Insert effects). Its screen appears in the plugin view,
 and the Q-Links follow the page.
 
+## MPC 3.10.1 and later
+
+MPC 3.10.1 loads third-party plugins itself: switch on **Settings > Enhancements > External Plugin Support**. It reads them
+from a folder called `VST2 Plugins` on the internal drive or an attached drive, one folder per plugin named
+`Milliano - SurgiQ` (without "VST"), holding the plugin's `plugin.json`. It doesn't use MPC.settings' plugin list.
+The installer notices this version: it installs into an existing `VST2 Plugins` folder on an attached drive (otherwise the
+internal drive's; `-t` picks another), names the folder `Milliano - SurgiQ`, leaves MPC.settings alone and restarts MPC, which finds
+the plugin as it starts. By hand: copy `portable/Milliano - VST - SurgiQ/` to `<drive>/VST2 Plugins/Milliano - SurgiQ/` and restart MPC.
+
 ## Uninstall
 
 `ssh root@<device-ip> sh /tmp/SurgiQ-0.20.0/uninstall.sh` removes the plugin folder and the plugin-list entry (it also stops and

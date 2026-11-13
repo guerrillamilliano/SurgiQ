@@ -56,6 +56,11 @@ The internal drive is the default and needs no patch. To install on an external 
 `-t <its Synths folder>` (for example `-t /media/SSD/Synths`; that needs a drive-exec patch, such as "Auto exec" from the
 mpc-vst-plugins patches). To remove it: `sh uninstall.sh` from the same folder, with the same `-t` if you used one.
 
+**MPC 3.10.1 and later:** switch on *Settings > Enhancements > External Plugin Support*. The installer notices 3.10.1 and
+installs into a `VST2 Plugins` folder (an existing one on an attached drive, otherwise the internal drive's) as
+`Milliano - SurgiQ`, with the `plugin.json` that MPC needs. It leaves MPC.settings alone and needs no drive-exec patch.
+On older MPC 3 versions it installs as before. Zips downloaded before 13 November 2026 predate this: download again.
+
 ## Build
 
 SurgiQ is a port for [sd88me/mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins) (MIT), which provides the
