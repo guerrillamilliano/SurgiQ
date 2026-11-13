@@ -32,7 +32,9 @@ from a folder called `VST2 Plugins` on the internal drive or an attached drive, 
 `Milliano - SurgiQ` (without "VST"), holding the plugin's `plugin.json`. It doesn't use MPC.settings' plugin list.
 The installer notices this version: it installs into an existing `VST2 Plugins` folder on an attached drive (otherwise the
 internal drive's; `-t` picks another), names the folder `Milliano - SurgiQ`, leaves MPC.settings alone and restarts MPC, which finds
-the plugin as it starts. By hand: copy `portable/Milliano - VST - SurgiQ/` to `<drive>/VST2 Plugins/Milliano - SurgiQ/` and restart MPC.
+the plugin as it starts. MPC 3.10.1 still draws the plugin's screen from `<drive>/Synths/Milliano - VST - SurgiQ/Plugin Skins`, so the
+installer puts the skin (`Plugin Skins/` and `version.xml`) there too. By hand: copy `portable/Milliano - VST - SurgiQ/` to
+`<drive>/VST2 Plugins/Milliano - SurgiQ/`, copy its `Plugin Skins/` and `version.xml` to `<drive>/Synths/Milliano - VST - SurgiQ/`, and restart MPC.
 
 ## Uninstall
 

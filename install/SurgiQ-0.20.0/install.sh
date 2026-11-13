@@ -78,7 +78,8 @@ else
 fi
 
 echo "Installing $NAME 0.20.0:"
-if [ "$VST2" = 1 ]; then echo "  $SYNTHS/$DIRNAME/ (skin, $SO, plugin.json and its data); MPC finds it when it starts"
+if [ "$VST2" = 1 ]; then echo "  $SYNTHS/$DIRNAME/ ($SO, plugin.json and its data; MPC finds it when it starts)"
+    echo "  $(dirname "$SYNTHS")/Synths/$SKIN/ (the skin: MPC 3.10.1 draws the plugin's screen from there)"
 else echo "  $SYNTHS/$SKIN/ (skin, $SO and its data), and an entry in $SETTINGS"; fi
 if [ $YES = 0 ]; then
     if [ $DEFER = 1 ]; then msg="MPC must already be stopped."; else msg="MPC will be stopped and restarted. Save your project first."; fi
@@ -147,8 +148,22 @@ mv "$STAGE" "$NEW"
 rm -rf "$OLD"
 
 if [ "$VST2" = 1 ]; then   # MPC 3.10.1+ scans the folder when it starts: no plugin-list entry, MPC.settings untouched
+    # ...but it still draws the plugin's screen from "<maker> - VST - <name>/Plugin Skins" in a SynthContentLocations
+    # folder (measured on a Live II, 3.10.1), never from VST2 Plugins: the skin also goes into the drive's Synths folder.
+    SKINS="$(dirname "$SYNTHS")/Synths"
+    [ -n "$MPC_SKINS" ] && SKINS="$MPC_SKINS"   # tests
+    SD="$SKINS/$SKIN"
+    if [ -f "$SD/$SO" ]; then   # a whole old-layout install: its own skin is already there, refreshed from this package
+        rm -rf "$SD/Plugin Skins"
+    else
+        rm -rf "$SD"; mkdir -p "$SD"
+    fi
+    cp -a "$NEW/Plugin Skins" "$SD/"
+    cp -a "$NEW/version.xml" "$SD/"
+    grep -qF "<Location>$SKINS</Location>" "$SETTINGS" ||
+        echo "warning: $SKINS isn't in MPC's SynthContentLocations, so the plugin's screen may not show (it still loads)"
     for o in /media/*/Synths/"$SKIN" /sdcard/Synths/"$SKIN"; do
-        [ -d "$o" ] && echo "note: an older copy in $o is no longer used by MPC and can be deleted"
+        [ -f "$o/$SO" ] && echo "note: the older install in $o is no longer used by MPC; delete only its $SO and data, keep Plugin Skins and version.xml"
     done
     sync
     echo "Done."

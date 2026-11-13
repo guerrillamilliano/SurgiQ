@@ -1,6 +1,6 @@
-9229d1095a4519d5c5f7a59d4702a3dec2456ac2d7f77eb0fcef3e66e92e9abe  INSTALL.md
+afed38ab97cdf14796cb3121676f8792bebfe0d986769577103a927af0a24e20  INSTALL.md
 0c6918a304505a498dc3875f188c78b14a9231babc786b95b5c022711db110d5  MODES
-88fa5b047dab7472379d1882e2ce0131c29793ae9efe14a10ee51f7bae75963c  install.sh
+b908c856d6d9114aef26515f3082f68eaf7d12129a06b31234f345168420dfdb  install.sh
 1db884fcba07e00269b34fcae7e831adbe441d2ef1800e7d4fb8194f7f8e3ff3  mpc-plugin.json
 a6df58b45fc6baf98d5f3a1c7e126d1c3dee42031883d84164b8b28d815534c2  plugin_list.awk
 fca9338f5d0815fec4a977a53291a1401f8bc57388b6a1b637c8bb1a78f16b4b  portable/Milliano - VST - SurgiQ/Plugin Skins/Q-Links - 8by1.json
@@ -826,4 +826,4 @@ e52652ed1f3133edb5cbd5a0a1d2647927cecf68a9d18e1638f4d7522c2c4f71  portable/Milli
 0cdbb8d2bd903bcf74f1da4afc7bf35298322f6dce1acc3f0766bb62a229e4a2  portable/Milliano - VST - SurgiQ/plugin-meta.xml
 24003f840a54309a3f59add0793daf477c37a44d587faf9a4c8da66daa9e5997  portable/Milliano - VST - SurgiQ/plugin.json
 b400c5d293c9ed8645017815a4407ffde0799ab865a62eab8c051701b437ae91  portable/Milliano - VST - SurgiQ/version.xml
-72e89eab99a46b09f68cfaa8d9f0bbd481c608c65f6ccd124eba68e7a0c6f99a  uninstall.sh
+75ece62299e6b0f38f601cfa2d78df34ab6688406dbcb68a734e850e11e297bc  uninstall.sh

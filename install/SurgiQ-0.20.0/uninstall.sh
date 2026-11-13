@@ -94,5 +94,9 @@ if [ -d "$DIR" ]; then
     if [ -d "$KEEP" ]; then mv "$KEEP" "$DIR"; echo "kept your own files in $DIR"; fi
 fi
 if [ "$LEGACY_SO" != "$FILE" ]; then rm -f "$OLDFILE"; fi
+if [ "$VST2" = 1 ]; then   # the skin install.sh put in the drive's Synths folder (left alone if it is a whole old-layout install)
+    SD="${MPC_SKINS:-$(dirname "$SYNTHS")/Synths}/$SKIN"
+    if [ -d "$SD" ] && [ ! -f "$SD/$SO" ]; then rm -rf "$SD"; fi
+fi
 sync
 echo "Removed $NAME. Settings backup: $BAK"
